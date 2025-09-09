@@ -28,8 +28,8 @@ class PyUpdaterManager:
         # 初始化 PyUpdater 客户端
         self.client = Client(ClientConfig(), refresh=True, progress_hooks=[self._progress_hook])
         
-        # 当前版本
-        self.current_version = "1.3.0"
+        # 当前版本 (从 VERSION 文件动态读取)
+        self.current_version = self._get_version_from_file()
         self.app_name = "MangaTranslatorUI"
         
         # 状态变量
@@ -45,6 +45,15 @@ class PyUpdaterManager:
         self.update_callbacks = []
         self.progress_callbacks = []
         self.status_callbacks = []
+
+    def _get_version_from_file(self):
+        try:
+            version_file = os.path.join(os.path.dirname(__file__), '..', '..', 'VERSION')
+            with open(version_file, 'r', encoding='utf-8') as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"Error reading VERSION file: {e}")
+            return "unknown"
     
     def register_update_callback(self, callback: Callable):
         """注册更新检查回调"""

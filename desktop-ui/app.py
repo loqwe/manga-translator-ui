@@ -2090,7 +2090,16 @@ class AppController:
         if template_switch:
             template_switch.configure(state="normal")
 
-    CURRENT_VERSION = "1.3"
+    @property
+    def CURRENT_VERSION(self):
+        if not hasattr(self, '_version'):
+            try:
+                version_file = os.path.join(os.path.dirname(__file__), '..', 'VERSION')
+                with open(version_file, 'r', encoding='utf-8') as f:
+                    self._version = f.read().strip()
+            except Exception:
+                self._version = "unknown"
+        return self._version
 
     def check_for_updates(self):
         try:
