@@ -69,3 +69,4 @@ torchsummary
 open_clip_torch
 google-generativeai
 python-bidi
+pyupdater>=4.0.0

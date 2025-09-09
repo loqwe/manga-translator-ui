@@ -35,3 +35,15 @@ result/
 # Backup files
 *.bak
 *.backup
+
+# Packaging & Update Scripts/Configs
+update_manager.py
+desktop-ui/client_config_*.py
+.pyupdater/
+keys/
+
+# Vendored projects
+Saber-Translator-2.5.1/
+
+# Temp files
+desktop-ui/temp/

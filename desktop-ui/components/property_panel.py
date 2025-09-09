@@ -103,7 +103,7 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         
         # 原文
         ctk.CTkLabel(self, text="原文:", anchor="w").grid(row=5, column=0, sticky="ew", padx=5, pady=(5, 0))
-        self.widgets['original_text'] = ctk.CTkTextbox(self, height=60)
+        self.widgets['original_text'] = ctk.CTkTextbox(self, height=60, undo=True, maxundo=-1)
         self.widgets['original_text'].grid(row=6, column=0, sticky="ew", padx=5, pady=2)
         
         # 绑定原文编辑事件
@@ -118,7 +118,7 @@ class PropertyPanel(ctk.CTkScrollableFrame):
         
         # 译文
         ctk.CTkLabel(self, text="译文:", anchor="w").grid(row=8, column=0, sticky="ew", padx=5, pady=(10, 0))
-        self.widgets['translation_text'] = ctk.CTkTextbox(self, height=80)
+        self.widgets['translation_text'] = ctk.CTkTextbox(self, height=80, undo=True, maxundo=-1)
         self.widgets['translation_text'].grid(row=9, column=0, sticky="ew", padx=5, pady=2)
         
         # 确保文本框可编辑

@@ -89,13 +89,22 @@ class FileManager:
                         print(f"Applied fallback target_lang '{default_target_lang}' to a region.")
 
             # 加载蒙版数据
-            mask_data_list = image_data.get('mask_raw')
-            if mask_data_list is not None:
-                if isinstance(mask_data_list, list):
-                    raw_mask = np.array(mask_data_list, dtype=np.uint8)
-                else:
-                    print(f"[ERROR] Invalid 'mask_raw' data in {os.path.basename(json_path)}. Expected a list, got {type(mask_data_list)}.")
+            mask_data = image_data.get('mask_raw')
+            if isinstance(mask_data, str):
+                try:
+                    import base64
+                    import cv2
+                    img_bytes = base64.b64decode(mask_data)
+                    img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+                    raw_mask = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+                except Exception as e:
+                    print(f"[ERROR] Failed to decode base64 mask in {os.path.basename(json_path)}: {e}")
                     raw_mask = None
+            elif isinstance(mask_data, list):
+                # Fallback for old list format
+                raw_mask = np.array(mask_data, dtype=np.uint8)
+            else:
+                raw_mask = None
             
             # 加载原始尺寸
             original_size = (image_data.get('original_width'), image_data.get('original_height'))

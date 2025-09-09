@@ -11,6 +11,8 @@ import traceback
 import json
 import cv2
 import pathlib
+import gc
+import torch
 
 from ui_components import show_toast, CollapsibleFrame
 from canvas_frame_new import CanvasFrame
@@ -44,7 +46,8 @@ class EditorFrame(ctk.CTkFrame):
         self.image: Optional[Image.Image] = None
         self.regions_data: List[Dict[str, Any]] = []
         self.selected_indices: List[int] = []
-        self.file_list: List[str] = []
+        self.source_files: List[str] = []
+        self.translated_files: List[str] = []
         self.last_mouse_event = None
         self.view_mode = 'normal'
         self.raw_mask: Optional[np.ndarray] = None
@@ -70,15 +73,11 @@ class EditorFrame(ctk.CTkFrame):
         self._build_ui()
         self._setup_component_connections()
         
-        # 延迟初始化后端配置同步，避免启动时的循环依赖
         self.after(200, self._init_backend_config)
         
         self.after(100, self._setup_shortcuts)
 
-        # 强制从文件重载一次配置，以确保UI显示的是最新的磁盘设置
         self.config_service.reload_from_disk()
-        
-        print("重构编辑器初始化完成")
 
     def _build_ui(self):
         self.grid_rowconfigure(1, weight=1)
@@ -153,7 +152,8 @@ class EditorFrame(ctk.CTkFrame):
                                              on_file_select=self._on_file_selected_from_list,
                                              on_load_files=self._load_files_from_dialog,
                                              on_load_folder=self._load_folder_from_dialog,
-                                             on_file_unload=self._on_file_unload)
+                                             on_file_unload=self._on_file_unload,
+                                             on_clear_list_requested=self._on_clear_list_requested)
         self.file_list_frame.grid(row=1, column=2, sticky="ns", padx=(1,2), pady=2)
 
         self.context_menu = EditorContextMenu(self)
@@ -161,7 +161,7 @@ class EditorFrame(ctk.CTkFrame):
     def _setup_component_connections(self):
         self.file_manager.register_callback('image_loaded', self._on_image_loaded)
         self.toolbar.register_callback('export_image', self._export_rendered_image)
-        self.toolbar.register_callback('save_file', self._save_file)
+        self.toolbar.register_callback('edit_file', self._on_edit_clicked)
         self.toolbar.register_callback('undo', self.undo)
         self.toolbar.register_callback('redo', self.redo)
         self.toolbar.register_callback('zoom_in', self._zoom_in)
@@ -342,92 +342,78 @@ class EditorFrame(ctk.CTkFrame):
         self.canvas_frame.set_regions(self.regions_data)
 
     def _on_image_loaded(self, image: Image.Image, image_path: str):
+        # 在加载新图片前，先尝试释放旧的GPU资源
+        self._release_gpu_memory()
+
         # 存储当前图片路径供导出使用
         self.current_image_path = image_path
         
         # 记住当前是否处于蒙版视图
         was_in_mask_view = self.view_mode == 'mask'
         
-        # 如果之前有加载的文件且有任何编辑，询问是否保存
-        if (hasattr(self, 'file_manager') and 
-            hasattr(self.file_manager, 'current_file_path') and 
-            self.file_manager.current_file_path and 
-            self._has_unsaved_changes()):
-            
-            try:
-                from tkinter import messagebox
-                current_file_name = os.path.basename(self.file_manager.current_file_path)
-                
-                result = messagebox.askyesno(
-                    title="保存修改", 
-                    message=f"您对 {current_file_name} 进行了编辑修改。\n\n是否要保存这些修改？"
-                )
-                
-                if result:
-                    print(f"用户选择保存修改: {current_file_name}")
-                    self._save_file()  # 使用现有的保存功能
-                else:
-                    print(f"用户选择不保存修改: {current_file_name}")
-                    
-            except Exception as e:
-                print(f"处理保存提示时出错: {e}")
-        
-        # 清理之前的蒙版状态
+        # 清理之前的状态
         self.refined_mask = None
         self.inpainted_image = None
         self.inpainting_in_progress = False
         self.mask_edit_start_state = None
-        
-        # 清理历史记录（新文件应该有新的历史记录）
         if hasattr(self, 'history_manager'):
             self.history_manager.clear()
             self._update_history_buttons()
-        
-        # 重置FileManager的修改状态
         if hasattr(self, 'file_manager'):
             self.file_manager.is_modified = False
         
         self.image = image
         self.canvas_frame.load_image(image_path)
+        
+        # 尝试加载JSON数据
         regions, raw_mask, original_size = self.file_manager.load_json_data(image_path)
-        self.regions_data = regions
-        self.raw_mask = raw_mask
-        self.original_size = original_size
+        
+        # 检查是否是作为源文件加载，并且找到了JSON
+        if image_path in self.source_files and regions:
+            # 这是为编辑而加载的原始图像
+            self.regions_data = regions
+            self.raw_mask = raw_mask
+            self.original_size = original_size
+            
+            show_toast(self, "检测到JSON，自动修复背景...", level="info")
+            # 自动触发蒙版和修复渲染
+            self.async_service.submit_task(self._generate_refined_mask_then_render())
+            
+            # 设置默认视图为“文字文本框显示”
+            self.toolbar.display_menu.set("文字文本框显示")
+            self._on_display_mode_changed("文字文本框显示")
+
+        else:
+            # 如果是翻译图（找不到JSON）或没有JSON的源图
+            self.regions_data = []
+            self.raw_mask = None
+            self.original_size = image.size
+            if not regions and image_path in self.source_files:
+                 show_toast(self, "未找到JSON翻译数据，请返回主界面翻译或手动编辑", level="info")
 
         # Set default font for regions that don't have one
-        print("--- DEBUG: Applying font path in _on_image_loaded ---")
         config = self.config_service.get_config()
         render_config = config.get('render', {})
         font_filename = render_config.get('font_path')
-        print(f"--- DEBUG: Font filename from config: {font_filename}")
-        if font_filename:
+        if font_filename and self.regions_data:
             full_font_path = os.path.join(os.path.dirname(__file__), '..', 'fonts', font_filename)
             full_font_path = os.path.abspath(full_font_path)
             final_font_path = pathlib.Path(full_font_path).as_posix()
-            print(f"--- DEBUG: Constructed full font path: {full_font_path}")
             if os.path.exists(full_font_path):
-                print("--- DEBUG: Font path exists. Applying to regions.")
                 for i, region in enumerate(self.regions_data):
                     if 'font_family' not in region or not region['font_family']:
                         region['font_family'] = final_font_path
-                        print(f"    -> Applied to region {i}")
-            else:
-                print("--- DEBUG: Font path does NOT exist.")
-        self.canvas_frame.set_original_size(original_size)
-        self.canvas_frame.set_mask(raw_mask)
-        
-        # 清理画布中的蒙版状态
+
+        self.canvas_frame.set_original_size(self.original_size)
+        self.canvas_frame.set_mask(self.raw_mask)
         self.canvas_frame.set_refined_mask(None)
         self.canvas_frame.set_inpainted_image(None)
         
-        # Push config to canvas and then set regions
         self._push_config_to_canvas()
         self.canvas_frame.set_regions(self.regions_data)
         self.after(100, self._fit_to_window)
         
-        # 如果之前处于蒙版视图，为新文件生成蒙版
         if was_in_mask_view:
-            print(f"切换到新文件时检测到蒙版视图模式，为新文件生成蒙版...")
             self.after(200, self._generate_mask_for_new_file)
         
         print(f"已加载图片: {os.path.basename(image_path)}, 蒙版状态已重置")
@@ -462,93 +448,123 @@ class EditorFrame(ctk.CTkFrame):
         except:
             # 出错时保守处理，认为有未保存的修改
             return True
-    
-    def _save_current_mask_data(self):
-        """保存当前文件的蒙版数据"""
-        if not self.file_manager.current_file_path:
+
+    def set_file_lists(self, source_files: List[str], translated_files: List[str]):
+        """Adds new source and translated files to the editor's lists, preventing duplicates."""
+        newly_added_for_ui = []
+        # Using a copy of source_files to check for existence, as we modify it in the loop
+        current_source_files = self.source_files.copy()
+
+        for i, src in enumerate(source_files):
+            if src not in current_source_files:
+                self.source_files.append(src)
+                if i < len(translated_files):
+                    # This assumes parallel lists, which is how app.py constructs them.
+                    trans = translated_files[i]
+                    self.translated_files.append(trans)
+                    newly_added_for_ui.append(trans)
+
+        if newly_added_for_ui:
+            self.file_list_frame.add_files(newly_added_for_ui)
+
+    def _on_edit_clicked(self):
+        """
+        When viewing a translated image, this switches to editing the original file.
+        """
+        current_file = self.file_manager.current_file_path
+        if not current_file or current_file not in self.translated_files:
+            show_toast(self, "请先从右侧列表选择一个翻译后的图片", level="warning")
             return
-            
-        json_path = os.path.splitext(self.file_manager.current_file_path)[0] + '_translations.json'
-        
+
         try:
-            # 读取现有的JSON文件
-            data_to_save = {}
-            if os.path.exists(json_path):
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    data_to_save = json.load(f)
+            idx = self.translated_files.index(current_file)
+            source_file_to_load = self.source_files[idx]
             
-            # 更新蒙版数据
-            image_key = os.path.abspath(self.file_manager.current_file_path)
-            if image_key not in data_to_save:
-                data_to_save[image_key] = {
-                    'regions': self.regions_data,
-                    'original_width': self.original_size[0] if self.original_size else 0,
-                    'original_height': self.original_size[1] if self.original_size else 0,
-                }
+            show_toast(self, f"正在加载原图 {os.path.basename(source_file_to_load)} 进行编辑...", level="info")
             
-            # 保存蒙版数据
-            if self.refined_mask is not None:
-                data_to_save[image_key]['mask_raw'] = self.refined_mask.tolist()
-                data_to_save[image_key]['mask_is_refined'] = True
-                print(f"保存精细蒙版数据到 {os.path.basename(json_path)}")
-            elif self.raw_mask is not None:
-                data_to_save[image_key]['mask_raw'] = self.raw_mask.tolist()
-                data_to_save[image_key]['mask_is_refined'] = False
-                print(f"保存原始蒙版数据到 {os.path.basename(json_path)}")
+            # This will trigger the full loading process including JSON
+            self.file_manager.load_image_from_path(source_file_to_load)
             
-            # 写入文件
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-                
-            show_toast(self, f"蒙版已保存到: {os.path.basename(json_path)}", level="success")
-                
-        except Exception as e:
-            print(f"保存蒙版数据失败: {e}")
-            show_toast(self, f"蒙版保存失败: {e}", level="error")
-            import traceback
-            traceback.print_exc()
+            # Automatically run mask generation and inpainting as requested
+            self.after(500, lambda: self.async_service.submit_task(self._generate_refined_mask_then_render()))
+
+        except (ValueError, IndexError):
+            show_toast(self, "无法找到对应的原始文件", level="error")
+            print(f"Error finding source for {current_file}. Index not found or out of bounds.")
 
     def _on_file_unload(self, file_path: str):
         """处理文件卸载请求"""
         try:
             from tkinter import messagebox
-            
             file_name = os.path.basename(file_path)
-            
-            # 询问是否保存
-            result = messagebox.askyesnocancel(
-                title="卸载文件", 
-                message=f"是否要保存 {file_name} 的修改？\n\n选择'是'保存并卸载\n选择'否'直接卸载\n选择'取消'不卸载"
-            )
-            
-            if result is None:  # 用户取消
-                return
-            elif result is True:  # 用户选择保存
-                # 如果这是当前加载的文件，保存它
-                if (hasattr(self.file_manager, 'current_file_path') and 
-                    self.file_manager.current_file_path == file_path):
-                    self._save_file()
+
+            # Check for unsaved changes only if we are in edit mode (i.e., a source file is loaded)
+            if self._has_unsaved_changes() and self.file_manager.current_file_path in self.source_files:
+                result = messagebox.askyesno(
+                    "应用更改?",
+                    f"您对 {os.path.basename(self.file_manager.current_file_path)} 进行了修改。是否应用更改并覆盖翻译后的图片 {file_name}？"
+                )
+
+                if result: # Yes, apply changes
+                    # The output path is the translated file path from the list that the user right-clicked on
+                    output_path = file_path
+                    show_toast(self, f"正在应用更改并覆盖 {os.path.basename(output_path)}...", level="info")
                     
-            # 从文件列表中移除
-            if file_path in self.file_list:
-                self.file_list.remove(file_path)
-            
+                    # The async task will handle exporting, and then unloading
+                    self.async_service.submit_task(self._async_export_and_unload(output_path, file_path))
+                    return # Let the async task handle the final unload
+
+            # If no changes or user selected "No", proceed with normal unload
+            self.perform_unload(file_path)
+        except Exception as e:
+            print(f"Error in _on_file_unload: {e}")
+            traceback.print_exc()
+            # Fallback to just unloading
+            self.perform_unload(file_path)
+
+    def perform_unload(self, file_path: str):
+        """Helper function to actually perform the unload operation."""
+        try:
+            is_translated = file_path in self.translated_files
+            is_source = file_path in self.source_files
+
+            # Remove from UI list
             self.file_list_frame.remove_file(file_path)
-            
-            # 如果卸载的是当前显示的文件，清空编辑器
+
+            if is_translated:
+                idx = self.translated_files.index(file_path)
+                self.translated_files.pop(idx)
+                if idx < len(self.source_files):
+                    self.source_files.pop(idx)
+            elif is_source:
+                # This handles files added manually through the editor
+                self.source_files.remove(file_path)
+
+            # If unloading the currently displayed file, clear the editor
             if (hasattr(self.file_manager, 'current_file_path') and 
                 self.file_manager.current_file_path == file_path):
                 self._clear_editor()
                 
-                # 如果还有其他文件，加载第一个
-                if self.file_list:
-                    self._on_file_selected_from_list(self.file_list[0])
+                # If there are other files, load the first one
+                if self.translated_files:
+                    self._on_file_selected_from_list(self.translated_files[0])
+                elif self.source_files:
+                    self._on_file_selected_from_list(self.source_files[0])
                     
-            show_toast(self, f"已卸载文件: {file_name}", level="success")
-            
+            show_toast(self, f"已卸载文件: {os.path.basename(file_path)}", level="success")
         except Exception as e:
-            print(f"卸载文件时出错: {e}")
-            show_toast(self, f"卸载文件失败: {e}", level="error")
+            print(f"Error in perform_unload: {e}")
+
+
+    async def _async_export_and_unload(self, output_path: str, file_to_unload: str):
+        """Chain export and unload operations."""
+        await self._async_export_with_mask(output_path)
+        
+        # Give some time for the file to be written
+        await asyncio.sleep(0.5)
+
+        # Now, unload from the UI thread
+        self.after(0, self.perform_unload, file_to_unload)
             
     def _clear_editor(self):
         """清空编辑器状态"""
@@ -561,6 +577,10 @@ class EditorFrame(ctk.CTkFrame):
         self.inpainting_in_progress = False
         self.original_size = None
         
+        if hasattr(self, 'history_manager'):
+            self.history_manager.clear()
+            self._update_history_buttons()
+        
         # 清空画布
         self.canvas_frame.clear_image()
         self.canvas_frame.set_regions([])
@@ -570,23 +590,40 @@ class EditorFrame(ctk.CTkFrame):
         
         # 清空属性面板
         self.property_panel.clear_panel()
+
+        # 尝试释放GPU内存
+        self._release_gpu_memory()
         
         print("编辑器状态已清空")
 
+    def _release_gpu_memory(self):
+        """尝试通过垃圾回收和清空CUDA缓存来释放GPU内存"""
+        try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                print("CUDA cache cleared.")
+        except Exception as e:
+            print(f"Error while releasing GPU memory: {e}")
+
     def _load_files_from_dialog(self):
-        files = filedialog.askopenfilenames(title="Select Image Files", filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.gif *.webp")])
+        files = filedialog.askopenfilenames(title="选择图片文件", filetypes=[("Image Files", "*.png *.jpg *.jpeg *.bmp *.gif *.webp")])
         if files:
             self._add_files_to_list(list(files))
 
     def _load_folder_from_dialog(self):
-        folder = filedialog.askdirectory(title="Select Folder")
+        folder = filedialog.askdirectory(title="选择文件夹")
         if folder:
             files = [os.path.join(folder, f) for f in sorted(os.listdir(folder)) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'))]
             self._add_files_to_list(files)
 
     def _add_files_to_list(self, file_paths: List[str]):
-        new_files = [fp for fp in file_paths if fp not in self.file_list]
-        self.file_list.extend(new_files)
+        # When adding files from within the editor, they are always treated as new source files.
+        # If we were in a "translated view" mode, this will break the parallel structure.
+        # For now, we just add to the source list and the UI list.
+        # The "Edit" button might fail for these new files, which is expected.
+        new_files = [fp for fp in file_paths if fp not in self.source_files]
+        self.source_files.extend(new_files)
         self.file_list_frame.add_files(new_files)
         if new_files and not self.image:
             self._on_file_selected_from_list(new_files[0])
@@ -722,11 +759,11 @@ class EditorFrame(ctk.CTkFrame):
         """从配置服务加载蒙版设置并更新UI"""
         try:
             config = self.config_service.get_config()
-            ocr_config = config.get('ocr', {})
             
-            dilation = ocr_config.get('mask_dilation_offset', 0)
-            kernel = ocr_config.get('kernel_size', 3)
-            ignore_bubble = ocr_config.get('ignore_bubble', 0)
+            # 从顶级配置获取参数，而不是OCR配置
+            dilation = config.get('mask_dilation_offset', 20)
+            kernel = config.get('kernel_size', 3)
+            ignore_bubble = config.get('ocr', {}).get('ignore_bubble', 0)  # ignore_bubble仍然在OCR中
             
             self.mask_dilation_offset_entry.delete(0, "end")
             self.mask_dilation_offset_entry.insert(0, str(dilation))
@@ -745,10 +782,13 @@ class EditorFrame(ctk.CTkFrame):
         """从UI获取蒙版设置并保存到配置"""
         try:
             config = self.config_service.get_config()
-            ocr_config = config.setdefault('ocr', {})
             
-            ocr_config['mask_dilation_offset'] = int(self.mask_dilation_offset_entry.get() or 0)
-            ocr_config['kernel_size'] = int(self.mask_kernel_size_entry.get() or 3)
+            # 保存到顶级配置，而不是OCR配置
+            config['mask_dilation_offset'] = int(self.mask_dilation_offset_entry.get() or 20)
+            config['kernel_size'] = int(self.mask_kernel_size_entry.get() or 3)
+            
+            # ignore_bubble 仍然保存在OCR配置中
+            ocr_config = config.setdefault('ocr', {})
             ocr_config['ignore_bubble'] = self.ignore_bubble_checkbox.get()
             
             self.config_service.set_config(config)
@@ -784,10 +824,14 @@ class EditorFrame(ctk.CTkFrame):
             
             # 获取最新的配置参数
             config = self.config_service.get_config()
+            
+            # 从顶级配置获取参数
+            kernel_size = config.get('kernel_size', 3)
+            mask_dilation_offset = config.get('mask_dilation_offset', 20)
+            
+            # ignore_bubble 仍然从OCR配置获取
             ocr_config = config.get('ocr', {})
-            kernel_size = ocr_config.get('kernel_size', 3)
             ignore_bubble = ocr_config.get('ignore_bubble', 0)
-            mask_dilation_offset = ocr_config.get('mask_dilation_offset', 0)
             
             # --- DEBUG: 打印将要传递给后端的蒙版偏移值 (更新蒙版时) ---
             print(f"--- MASK_DEBUG (UPDATE): Preparing to refine mask with dilation_offset: {mask_dilation_offset} ---")
@@ -875,6 +919,10 @@ class EditorFrame(ctk.CTkFrame):
             import traceback
             traceback.print_exc()
             show_toast(self, f"更新蒙版失败: {e}", level="error")
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _on_mask_edit_start(self):
         if self.refined_mask is not None:
@@ -996,12 +1044,14 @@ class EditorFrame(ctk.CTkFrame):
             
             # 从配置服务获取蒙版精细化参数
             config = self.config_service.get_config()
-            ocr_config = config.get('ocr', {})
             
-            # 获取蒙版精细化配置参数
-            kernel_size = ocr_config.get('kernel_size', 3)
+            # 从顶级配置获取参数
+            kernel_size = config.get('kernel_size', 3)
+            mask_dilation_offset = config.get('mask_dilation_offset', 20)
+            
+            # ignore_bubble 仍然从OCR配置获取
+            ocr_config = config.get('ocr', {})
             ignore_bubble = ocr_config.get('ignore_bubble', 0)
-            mask_dilation_offset = ocr_config.get('mask_dilation_offset', 0)
 
             # --- DEBUG: 打印将要传递给后端的蒙版偏移值 ---
             print(f"--- MASK_DEBUG: Preparing to refine mask with dilation_offset: {mask_dilation_offset} ---")
@@ -1052,6 +1102,9 @@ class EditorFrame(ctk.CTkFrame):
             show_toast(self, f"蒙版生成失败: {e}", level="error")
         finally:
             self.toolbar.set_render_button_state("normal")
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     async def _generate_inpainted_preview(self, mask_to_use: np.ndarray):
         try:
@@ -1114,6 +1167,9 @@ class EditorFrame(ctk.CTkFrame):
             show_toast(self, f"预览生成失败: {e}", level="error")
         finally:
             self.inpainting_in_progress = False
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def _zoom_in(self):
         center_x = self.canvas_frame.canvas.winfo_width() / 2
@@ -1442,78 +1498,6 @@ class EditorFrame(ctk.CTkFrame):
         else:
             print("属性面板缺少语言代码映射")
 
-    def _save_file(self):
-        if not self.image or not self.file_manager.current_file_path:
-            show_toast(self, "没有加载的图像可供保存", level="error")
-            return
-
-        json_path = os.path.splitext(self.file_manager.current_file_path)[0] + '_translations.json'
-        
-        # 添加确认提示
-        try:
-            from tkinter import messagebox
-            current_file_name = os.path.basename(self.file_manager.current_file_path)
-            json_file_name = os.path.basename(json_path)
-            
-            # 检查是否已存在JSON文件
-            file_exists = os.path.exists(json_path)
-            if file_exists:
-                message = f"确定要保存并覆盖现有的翻译文件吗？\n\n图像文件：{current_file_name}\n翻译文件：{json_file_name}\n\n这将覆盖已存在的文件。"
-            else:
-                message = f"确定要保存翻译文件吗？\n\n图像文件：{current_file_name}\n翻译文件：{json_file_name}\n\n将创建新的翻译文件。"
-            
-            result = messagebox.askyesno(
-                title="确认保存", 
-                message=message
-            )
-            
-            if not result:
-                print("用户取消了保存操作")
-                return
-                
-        except Exception as e:
-            print(f"显示确认对话框时出错: {e}")
-            # 如果对话框出错，继续保存操作
-        
-        try:
-            config = self.config_service.get_config()
-            ignore_font_size = config.get('cli', {}).get('force_auto_font_size', False)
-
-            # Deepcopy to avoid modifying the live editor state, and clean up data for saving
-            regions_to_save = copy.deepcopy(self.regions_data)
-            for region in regions_to_save:
-                # Remove transient editor-only data before saving
-                if 'center' in region:
-                    del region['center']
-                if ignore_font_size and 'font_size' in region:
-                    del region['font_size']
-
-            image_key = os.path.abspath(self.file_manager.current_file_path)
-            data_to_save = {
-                image_key: {
-                    'regions': regions_to_save,
-                    'original_width': self.original_size[0],
-                    'original_height': self.original_size[1],
-                }
-            }
-
-            if self.refined_mask is not None:
-                data_to_save[image_key]['mask_raw'] = self.refined_mask.tolist()
-                data_to_save[image_key]['mask_is_refined'] = True
-            elif self.raw_mask is not None:
-                data_to_save[image_key]['mask_raw'] = self.raw_mask.tolist()
-                data_to_save[image_key]['mask_is_refined'] = False
-
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            
-            show_toast(self, f"文件已保存到: {os.path.basename(json_path)}", level="success")
-
-        except Exception as e:
-            print(f"Error saving file: {e}")
-            traceback.print_exc()
-            show_toast(self, f"文件保存失败: {e}", level="error")
-
     def _export_rendered_image(self):
         """导出后端渲染的图片 - 处理用户交互并启动异步导出任务"""
         self._save_mask_settings_to_config()
@@ -1524,8 +1508,16 @@ class EditorFrame(ctk.CTkFrame):
         try:
             # Use export_service to get initial path and config
             from services.export_service import get_export_service
+            from tkinter import messagebox
+
             export_service = get_export_service()
             output_dir = export_service.get_output_directory()
+
+            if not output_dir:
+                show_toast(self, "请先在主界面设置输出目录", level="error")
+                messagebox.showerror("错误", "未设置输出目录。请返回主界面设置输出目录。")
+                return
+
             config = self.config_service.get_config()
             output_format = export_service.get_output_format_from_config(config)
 
@@ -1535,27 +1527,13 @@ class EditorFrame(ctk.CTkFrame):
             else:
                 default_filename = f"translated_image.{output_format or 'png'}"
 
-            initial_file = os.path.join(output_dir, default_filename) if output_dir else default_filename
+            output_path = os.path.join(output_dir, default_filename)
 
-            # Define file types for the dialog
-            if output_format == "jpg" or output_format == "jpeg":
-                filetypes = [("JPEG files", "*.jpg"), ("PNG files", "*.png"), ("All files", "*.*")]
-                default_ext = ".jpg"
-            else:
-                filetypes = [("PNG files", "*.png"), ("JPEG files", "*.jpg"), ("All files", "*.*")]
-                default_ext = ".png"
-
-            # Open file dialog to get the output path from the user
-            output_path = filedialog.asksaveasfilename(
-                title="导出渲染图片",
-                initialfile=initial_file,
-                initialdir=output_dir,
-                defaultextension=default_ext,
-                filetypes=filetypes
-            )
-            
-            if not output_path:
-                return # User cancelled
+            # Check if file exists and ask for overwrite confirmation
+            if os.path.exists(output_path):
+                if not messagebox.askyesno("确认覆盖", f"文件 '{default_filename}' 已存在于输出目录中。是否要覆盖它？"):
+                    show_toast(self, "导出已取消", level="info")
+                    return
 
             # Submit the actual export process to the async service
             self.async_service.submit_task(self._async_export_with_mask(output_path))
@@ -1609,6 +1587,10 @@ class EditorFrame(ctk.CTkFrame):
             print(f"异步导出图片失败: {e}")
             traceback.print_exc()
             show_toast(self, f"导出图片时发生意外错误: {e}", level="error")
+        finally:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def reload_config_and_redraw(self):
         """Public method to reload configuration and trigger a full redraw."""
@@ -1642,3 +1624,34 @@ class EditorFrame(ctk.CTkFrame):
         # Also update the new mask settings UI
         if hasattr(self, '_load_mask_settings_from_config'):
             self._load_mask_settings_from_config()
+
+    def _clear_all_files(self):
+        """Clears the file list, internal state, and editor canvas."""
+        self.file_list_frame.clear_files()
+        self.source_files.clear()
+        self.translated_files.clear()
+        self._clear_editor()
+        show_toast(self, "列表已清空", "info")
+
+    def _on_clear_list_requested(self):
+        """Handles the request to clear the file list, with confirmations."""
+        from tkinter import messagebox
+
+        if not self.source_files and not self.translated_files:
+            show_toast(self, "列表已经为空", "info")
+            return
+
+        # Check for unsaved changes in the currently loaded file
+        if self._has_unsaved_changes():
+            messagebox.showwarning(
+                "请先保存",
+                "当前文件有未保存的修改。请先手动保存或放弃更改，然后再清空列表。"
+            )
+            return
+        
+        # No unsaved changes, just confirm
+        if messagebox.askyesno(
+            "确认清空",
+            "您确定要清空所有文件列表吗？此操作不可撤销。"
+        ):
+            self._clear_all_files()

@@ -11,6 +11,8 @@ import queue
 import threading
 import subprocess
 import signal
+import requests
+import webbrowser
 from dotenv import dotenv_values, set_key
 from PIL import Image
 from typing import List
@@ -185,6 +187,9 @@ class AppController:
         
         # 延迟初始化重量级组件 (等UI完全启动后)
         self.app.after(500, self._async_init_heavy_components)
+        
+        # 初始化PyUpdater更新通知 
+        self.app.after(1000, self._init_update_notification)
 
     def _init_essential_attributes(self):
         """初始化必要的属性，避免AttributeError"""
@@ -307,6 +312,29 @@ class AppController:
         """实际的配置加载方法"""
         # 这里需要找到实际的load_default_config实现
         pass
+    
+    def _init_update_notification(self):
+        """初始化更新通知"""
+        try:
+            from components.pyupdater_widget import UpdateNotificationWidget
+            from services.pyupdater_manager import get_updater_manager
+            
+            # 创建全局更新通知小部件
+            main_view = self.views.get(MainView)
+            if main_view:
+                self.update_notification = UpdateNotificationWidget(main_view.right_container)
+                # 插入到设置标签页上方
+                self.update_notification.pack(fill="x", pady=(0, 5), before=main_view.settings_tabview)
+                
+                # 获取更新管理器并启动自动检查
+                updater = get_updater_manager()
+                if updater.get_auto_update_check():
+                    self.app.after(3000, lambda: updater.check_for_updates(async_check=True))
+            
+        except ImportError as e:
+            print(f"无法加载PyUpdater更新通知: {e}")
+        except Exception as e:
+            print(f"初始化更新通知失败: {e}")
     
     def _async_init_heavy_components(self):
         """异步初始化重量级组件"""
@@ -571,8 +599,8 @@ class AppController:
             "overwrite": "覆盖已存在文件",
             "skip_no_text": "跳过无文本图像",
             "use_mtpe": "启用后期编辑(MTPE)",
-            "save_text": "保存文本",
-            "load_text": "加载文本",
+            "save_text": "图片可编辑",
+            "load_text": "导入翻译",
             "save_text_file": "保存文本路径",
             "prep_manual": "为手动排版做准备",
             "save_quality": "图像保存质量",
@@ -591,7 +619,7 @@ class AppController:
             "batch_size": "批量大小",
             "batch_concurrent": "并发批量处理",
             "config_file": "配置文件",
-            "template": "模板模式"
+            "template": "导出翻译"
         }
 
     def translate(self, text):
@@ -683,7 +711,16 @@ class AppController:
             elif is_bool_by_schema or isinstance(value, bool):
                 current_value = value if isinstance(value, bool) else False
                 widget = ctk.CTkSwitch(parent_frame, text="", onvalue=True, offvalue=False)
-                widget.configure(command=lambda w=widget, k=full_key: self._save_widget_change(k, w))
+                
+                command = lambda w=widget, k=full_key: self._save_widget_change(k, w)
+                if full_key == "cli.load_text":
+                    command = self._on_load_text_toggled
+                elif full_key == "cli.save_text":
+                    command = self._on_save_text_toggled
+                elif full_key == "cli.template":
+                    command = self._on_template_toggled
+
+                widget.configure(command=command)
                 if current_value: widget.select()
                 else: widget.deselect()
             elif isinstance(value, (int, float)):
@@ -878,7 +915,7 @@ class AppController:
                     widget = self.parameter_widgets.get(full_key)
                 
                 if widget is not None:
-                    value = self._get_widget_value(widget)
+                value = self._get_widget_value(widget)
             
             self.update_log(f"[DEBUG] Value to save: {value} (Type: {type(value)})\n")
 
@@ -1032,10 +1069,11 @@ class AppController:
         
         self.on_translator_change(current_translator)
         
-        # 右侧：文本识别设置
-        ocr_frame = CollapsibleFrame(basic_right, title=self.translate("text_recognition_tab"))
-        ocr_frame.pack(fill="x", pady=5)
-        self.create_param_widgets(config.get("ocr", {}), ocr_frame.content_frame, "ocr")
+        # 右侧：命令行参数
+        cli_frame = CollapsibleFrame(basic_right, title=self.translate("cli_options"))
+        cli_frame.pack(fill="x", pady=5)
+        cli_params = config.get("cli", {})
+        self.create_param_widgets(cli_params, cli_frame.content_frame, "cli")
         
         # === 高级设置标签页 ===
         advanced_left = self.main_view_widgets['advanced_left_frame']
@@ -1099,11 +1137,51 @@ class AppController:
         
         # === 选项标签页 ===
         options_left = self.main_view_widgets['options_left_frame']
+        options_right = self.main_view_widgets['options_right_frame']
         
-        cli_frame = CollapsibleFrame(options_left, title=self.translate("cli_options"))
-        cli_frame.pack(fill="x", pady=5)
-        cli_params = config.get("cli", {})
-        self.create_param_widgets(cli_params, cli_frame.content_frame, "cli")
+        # 文本识别设置
+        ocr_frame = CollapsibleFrame(options_left, title=self.translate("text_recognition_tab"))
+        ocr_frame.pack(fill="x", pady=5)
+        self.create_param_widgets(config.get("ocr", {}), ocr_frame.content_frame, "ocr")
+
+        # 版本和自动更新 (PyUpdater)
+        try:
+            from components.pyupdater_widget import AutoUpdateWidget
+            
+            version_frame = CollapsibleFrame(options_right, title="版本和自动更新")
+            version_frame.pack(fill="x", pady=5)
+            
+            # 集成PyUpdater自动更新组件
+            self.auto_update_widget = AutoUpdateWidget(version_frame.content_frame)
+            self.auto_update_widget.pack(fill="x", pady=5)
+            
+        except ImportError as e:
+            # 如果PyUpdater不可用，回退到手动更新
+            print(f"PyUpdater不可用，使用手动更新: {e}")
+            
+            version_frame = CollapsibleFrame(options_right, title="版本和更新")
+            version_frame.pack(fill="x", pady=5)
+            
+            # 基本版本信息
+            info_frame = ctk.CTkFrame(version_frame.content_frame, fg_color="transparent")
+            info_frame.pack(fill="x", pady=5)
+            
+            version_label = ctk.CTkLabel(info_frame, text=f"当前版本: {self.CURRENT_VERSION}", font=ctk.CTkFont(size=14, weight="bold"))
+            version_label.pack(pady=2)
+            
+            build_info_label = ctk.CTkLabel(info_frame, text="构建类型: 独立版本", font=ctk.CTkFont(size=12))
+            build_info_label.pack(pady=1)
+            
+            update_info_label = ctk.CTkLabel(info_frame, text="更新方式: 手动检查", font=ctk.CTkFont(size=12), text_color="gray")
+            update_info_label.pack(pady=1)
+            
+            # 按钮框架
+            button_frame = ctk.CTkFrame(version_frame.content_frame, fg_color="transparent")
+            button_frame.pack(fill="x", pady=5)
+            
+            check_update_button = ctk.CTkButton(button_frame, text="检查更新", command=self.check_for_updates)
+            check_update_button.pack(pady=5)
+
 
         # Set initial state for the template switch
         self._update_template_state()
@@ -1116,7 +1194,9 @@ class AppController:
         initial_renderer = config.get("render", {}).get("renderer", "default")
         self._on_renderer_changed(initial_renderer)
 
-    
+        self._update_start_button_text()
+
+
     def add_files(self):
         files = filedialog.askopenfilenames(parent=self.app)
         for f in files:
@@ -1247,10 +1327,10 @@ class AppController:
                 self.update_log("模板模式 + 保存文本：正在执行导出...\n")
                 # 使用线程安全的方式运行异步导出
                 def run_export():
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                     loop.run_until_complete(self._process_txt_export_async())
-                    loop.close()
+                loop.close()
                     self.app.after(0, self._reset_start_button)
                 
                 threading.Thread(target=run_export, daemon=True).start()
@@ -1266,54 +1346,15 @@ class AppController:
         self.run_translation_thread()
 
     def start_translation(self):
-        # This method now only sets up the environment and starts the single pipeline thread.
         try:
             # --- Log config at the start of translation ---
             import json
-            config_dict_for_log = self.get_config_from_widgets(as_dict=True)
-            self.update_log(f"DEBUG: Final config from UI: {json.dumps(config_dict_for_log, indent=2, ensure_ascii=False)}\n")
+            # Use a temporary variable to hold the modified config for logging
+            config_to_log = self.get_config_from_widgets(as_dict=True)
+            self.update_log(f"DEBUG: Final config for worker: {json.dumps(config_to_log, indent=2, ensure_ascii=False)}\n")
             # --- End log ---
 
-            config_dict = self.get_config_from_widgets(as_dict=True)
-            
-            translator_params = {}
-            if 'cli' in config_dict:
-                translator_params.update(config_dict.pop('cli'))
-            
-            # 提取字体路径并设置为翻译器参数
-            render_config = config_dict.get('render', {})
-            font_filename = render_config.get('font_path')
-            if font_filename:
-                # 构建完整的字体路径
-                font_full_path = resource_path(os.path.join('fonts', font_filename))
-                if os.path.exists(font_full_path):
-                    translator_params['font_path'] = font_full_path
-                    self.update_log(f"设置翻译器字体路径: {font_full_path}\n")
-                else:
-                    self.update_log(f"警告: 字体文件不存在: {font_full_path}\n")
-            
-            translator_params.update(config_dict)
-            translator_params['is_ui_mode'] = True
-
-            self.update_log("正在初始化翻译引擎... (首次运行需要一些时间)\n")
-            MangaTranslator, _ = get_manga_translator_classes()
-            self.service = MangaTranslator(params=translator_params)
-
-            # Setup stop mechanism
-            self.stop_requested.clear()
-
-            async def stop_check_hook(state, finished):
-                if self.stop_requested.is_set():
-                    raise TranslationInterrupt("Translation stopped by user.")
-            
-            self.service.add_progress_hook(stop_check_hook)
-
-        except Exception as e:
-            self.update_log(f"初始化翻译引擎时出错: {e}\n")
-            messagebox.showerror("初始化错误", f"初始化翻译引擎时出错: {e}")
-            return
-
-        if self.translation_process and self.translation_process.poll() is None:
+            if self.translation_process and self.translation_process.poll() is None:
             self.update_log("\n翻译已在运行。请使用停止按钮终止当前翻译。")
             return
 
@@ -1321,42 +1362,18 @@ class AppController:
         self.main_view_widgets['start_translation_button'].configure(
             text="停止翻译",
             command=self.stop_translation,
-            fg_color=("#DB4437", "#C53929"),
-            hover_color=("#C53929", "#B03021")
-        )
+                fg_color=('#DB4437', '#C53929'),
+                hover_color=('#C53929', '#B03021')
+            )
 
-        # --- Pre-translation Hooks (e.g., text import) ---
-        config_dict_for_check = self.get_config_from_widgets(as_dict=True)
-        cli_params_for_check = config_dict_for_check.get('cli', {})
-        load_text_enabled = cli_params_for_check.get('load_text', False)
-        template_enabled = cli_params_for_check.get('template', False)
-
-        if load_text_enabled and template_enabled:
-            self.update_log("检测到加载文本和模板模式同时开启，正在执行从TXT文件导入翻译...\n")
-            
-            # Define a wrapper to run the async import in a thread
-            def run_import_in_thread():
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    result = loop.run_until_complete(self._process_txt_import_async())
-                    loop.close()
-                    if result is False:
-                        self.update_log("TXT导入预处理失败，任务中止。\n")
-                        self.app.after(0, self._reset_start_button)
-                        return
-                    # If import is successful, proceed to translation
-                    self.app.after(0, self._proceed_with_translation)
-                except Exception as e:
-                    self.update_log(f"启动TXT导入时出错: {e}\n")
-                    self.app.after(0, self._reset_start_button)
-            
-            # Start the import process in a separate thread to avoid blocking UI
-            import_thread = threading.Thread(target=run_import_in_thread, daemon=True)
-            import_thread.start()
-        else:
-            # If no import is needed, proceed directly to translation
+            # Always proceed to translation, the config will tell the worker what to do
             self._proceed_with_translation()
+
+        except Exception as e:
+            self.update_log(f"启动翻译时出错: {e}\n")
+            import traceback
+            self.update_log(f"详细错误: {traceback.format_exc()}\n")
+            self._reset_start_button()
 
     def _proceed_with_translation(self):
         """Continues with the translation process after pre-hooks."""
@@ -1382,8 +1399,8 @@ class AppController:
                 universal_newlines=True,
                 encoding='utf-8',  # 强制使用UTF-8编码
                 errors='ignore',   # 忽略编码错误
-                env=dict(os.environ,
-                        PYTHONUNBUFFERED='1',
+                env=dict(os.environ, 
+                        PYTHONUNBUFFERED='1', 
                         PYTHONIOENCODING='utf-8',
                         PYTHONUTF8='1'),  # 强制Python使用UTF-8
                 cwd=os.path.dirname(__file__)
@@ -1571,67 +1588,7 @@ class AppController:
         except Exception as e:
             self.log_queue.put(('error', f"监控进程出错: {e}"))
     
-    def _monitor_translation_simple(self):
-        """简化的翻译进程监控"""
-        try:
-            self.update_log("开始监控翻译进程输出...\n")
-            
-            while self.translation_process and self.translation_process.poll() is None:
-                try:
-                    line = self.translation_process.stdout.readline()
-                    if line:
-                        line_text = line.strip()
-                        if line_text:
-                            # 使用partial来避免闭包问题
-                            from functools import partial
-                            update_func = partial(self._update_log_safe, line_text + '\n')
-                            self.app.after(0, update_func)
-                except UnicodeDecodeError as decode_error:
-                    from functools import partial
-                    error_func = partial(self._update_log_safe, f"编码错误，跳过一行: {decode_error}\n")
-                    self.app.after(0, error_func)
-                    continue
-                except Exception as read_error:
-                    from functools import partial
-                    error_func = partial(self._update_log_safe, f"读取输出时出错: {read_error}\n")
-                    self.app.after(0, error_func)
-                    break
-            
-            # 读取剩余输出
-            try:
-                remaining_output, _ = self.translation_process.communicate(timeout=5)
-                if remaining_output:
-                    lines = remaining_output.strip().split('\n')
-                    for output_line in lines:
-                        if output_line.strip():
-                            from functools import partial
-                            final_func = partial(self._update_log_safe, output_line.strip() + '\n')
-                            self.app.after(0, final_func)
-            except subprocess.TimeoutExpired:
-                from functools import partial
-                timeout_func = partial(self._update_log_safe, "等待进程结束超时\n")
-                self.app.after(0, timeout_func)
-            except UnicodeDecodeError as decode_error:
-                from functools import partial
-                decode_func = partial(self._update_log_safe, f"最终输出编码错误: {decode_error}\n")
-                self.app.after(0, decode_func)
-            except Exception as comm_error:
-                from functools import partial
-                comm_func = partial(self._update_log_safe, f"读取最终输出时出错: {comm_error}\n")
-                self.app.after(0, comm_func)
-            
-            # 结束处理
-            return_code = self.translation_process.returncode if self.translation_process else None
-            from functools import partial
-            end_func = partial(self._update_log_safe, f"翻译进程结束，返回码: {return_code}\n")
-            self.app.after(0, end_func)
-            self.app.after(0, self._reset_start_button)
-            
-        except Exception as monitor_error:
-            from functools import partial
-            monitor_func = partial(self._update_log_safe, f"监控进程时出错: {monitor_error}\n")
-            self.app.after(0, monitor_func)
-            self.app.after(0, self._reset_start_button)
+    
     
     def _update_log_safe(self, text):
         """安全的日志更新方法"""
@@ -1849,7 +1806,7 @@ class AppController:
                                 break
                         
                         os.makedirs(final_output_dir, exist_ok=True)
-                        output_filename = "translated_" + os.path.basename(file_path)
+                        output_filename = os.path.basename(file_path)
                         final_output_path = os.path.join(final_output_dir, output_filename)
                         
                         image_to_save = ctx.result
@@ -1896,68 +1853,78 @@ class AppController:
             config_dict = self.get_config_from_widgets(as_dict=True)
             cli_config = config_dict.get('cli', {})
             
+            # The user wants to enter the editor when "图片可编辑" is enabled
             save_text_enabled = cli_config.get('save_text', False)
             template_enabled = cli_config.get('template', False)
             
             self.update_log(f"调试：save_text={save_text_enabled}, template={template_enabled}\n")
             
             resolved_files = self._resolve_input_files()
+            # The prompt should appear if "图片可编辑" is on, and it's not template mode.
             if save_text_enabled and not template_enabled and resolved_files:
                 from tkinter import messagebox
                 
                 result = messagebox.askyesno(
-                    title="翻译完成", 
-                    message=f"翻译已完成！\n\n检测到您启用了保存文本功能，是否进入可视化编辑器查看和编辑翻译结果？\n\n处理的文件数量：{len(resolved_files)}"
+                    title="加载翻译图片", 
+                    message=f"翻译已完成！\n\n是否加载翻译后的图片到编辑器查看？"
                 )
                 
                 if result:
-                    self.enter_editor_with_processed_files()
+                    self.enter_editor_with_translated_files()
                     
         except Exception as e:
             self.update_log(f"检查编辑器提示时出错: {e}\n")
             import traceback
             traceback.print_exc()
     
-    def enter_editor_with_processed_files(self):
-        """进入编辑器并加载处理完的文件"""
+    def enter_editor_with_translated_files(self):
+        """进入编辑器并加载翻译完的图片"""
         try:
             self.show_view(EditorView)
             
             editor_frame = self.views[EditorView].editor_frame
             
-            resolved_files = self._resolve_input_files()
-            if not resolved_files:
-                self.update_log("没有找到可加载的文件\n")
+            source_files = self._resolve_input_files()
+            if not source_files:
+                self.update_log("没有找到可加载的源文件\n")
                 return
 
-            files_with_json = []
-            for file_path in resolved_files:
-                json_path = os.path.splitext(file_path)[0] + "_translations.json"
-                if os.path.exists(json_path):
-                    files_with_json.append(file_path)
+            # Calculate the paths of the translated files
+            base_output_dir = self.main_view_widgets['output_folder_entry'].get()
+            input_folders = {os.path.normpath(path) for path in self.input_files if os.path.isdir(path)}
+            
+            translated_files = []
+            for file_path in source_files:
+                final_output_dir = base_output_dir
+                parent_dir = os.path.normpath(os.path.dirname(file_path))
+                for folder in input_folders:
+                    if parent_dir.startswith(folder):
+                        final_output_dir = os.path.join(base_output_dir, os.path.basename(folder))
+                        break
+                
+                output_filename = os.path.basename(file_path)
+                final_output_path = os.path.join(final_output_dir, output_filename)
+                
+                if os.path.exists(final_output_path):
+                    translated_files.append(final_output_path)
                 else:
-                    self.update_log(f"警告: 未找到JSON文件: {os.path.basename(json_path)}\n")
+                    self.update_log(f"警告: 未找到翻译后的文件: {os.path.basename(final_output_path)}\n")
+
+            if not translated_files:
+                self.update_log("没有找到任何翻译后的文件可供加载\n")
+                return
             
             import gc
             gc.collect()
             
-            editor_frame._add_files_to_list(resolved_files)
+            # Pass both lists to the editor
+            editor_frame.set_file_lists(source_files=source_files, translated_files=translated_files)
             
-            if resolved_files:
-                self.app.after(500, lambda: self._load_first_file_in_editor(editor_frame, resolved_files[0]))
+            if translated_files:
+                # Load the first translated file
+                self.app.after(500, lambda: editor_frame._on_file_selected_from_list(translated_files[0]))
             
-            self.update_log(f"已加载 {len(resolved_files)} 个文件到编辑器\n")
-            self.update_log(f"其中 {len(files_with_json)} 个文件有翻译数据\n")
-            
-            try:
-                from ui_components import show_toast
-                self.app.after(1500, lambda: show_toast(
-                    editor_frame, 
-                    f"已加载 {len(resolved_files)} 个处理完的文件，其中 {len(files_with_json)} 个包含翻译数据", 
-                    level="success"
-                ))
-            except Exception as e:
-                print(f"显示提示消息失败: {e}")
+            self.update_log(f"已加载 {len(translated_files)} 个翻译文件到编辑器\n")
                 
         except Exception as e:
             self.update_log(f"进入编辑器时出错: {e}\n")
@@ -2051,6 +2018,16 @@ class AppController:
         # self.update_log(f"DEBUG: Final config from UI: {json.dumps(config_dict, indent=2, ensure_ascii=False)}\n")
         # --- END DEBUGGING ---
 
+        # New logic to enforce backend dependencies based on simplified UI
+        cli_params = config_dict.get('cli', {})
+        if cli_params.get('template'): # This is the "Export" switch in the UI
+            # If "Export" is checked, the backend needs both template and save_text
+            cli_params['save_text'] = True
+        
+        if cli_params.get('load_text'): # This is the "Import" switch in the UI
+            # If "Import" is checked, the backend needs both load_text and template
+            cli_params['template'] = True
+
         if as_dict:
             return config_dict
 
@@ -2064,42 +2041,71 @@ class AppController:
             ocr=OcrConfig(**config_dict.get('ocr', {}))
         )
 
+    def _update_start_button_text(self):
+        load_switch = self.parameter_widgets.get("cli.load_text")
+        template_switch = self.parameter_widgets.get("cli.template")
+        button = self.main_view_widgets.get('start_translation_button')
+
+        if not all([load_switch, template_switch, button]):
+            return
+
+        if load_switch.get() == 1:
+            button.configure(text="导入翻译并渲染")
+        elif template_switch.get() == 1:
+            button.configure(text="导出翻译")
+        else:
+            button.configure(text="开始翻译")
+
     def _on_load_text_toggled(self):
-        load_switch = self.cli_widgets.get("load_text")
-        save_switch = self.cli_widgets.get("save_text")
-        
-        if load_switch and save_switch and load_switch.get() == 1:
-            save_switch.deselect()
-            self._save_widget_change("cli.save_text", save_switch)
-        
-        self._update_template_state()
+        load_switch = self.parameter_widgets.get("cli.load_text")
+        template_switch = self.parameter_widgets.get("cli.template")
+
+        if load_switch and template_switch and load_switch.get() == 1:
+            template_switch.deselect()
+            self._save_widget_change("cli.template", template_switch)
+
+        self._update_start_button_text()
         self._save_widget_change("cli.load_text", load_switch)
 
     def _on_save_text_toggled(self):
-        load_switch = self.cli_widgets.get("load_text")
-        save_switch = self.cli_widgets.get("save_text")
+        save_switch = self.parameter_widgets.get("cli.save_text")
+        self._update_start_button_text()
+        self._save_widget_change("cli.save_text", save_switch)
 
-        if load_switch and save_switch and save_switch.get() == 1:
+    def _on_template_toggled(self):
+        template_switch = self.parameter_widgets.get("cli.template")
+        load_switch = self.parameter_widgets.get("cli.load_text")
+
+        if template_switch and load_switch and template_switch.get() == 1:
             load_switch.deselect()
             self._save_widget_change("cli.load_text", load_switch)
 
-        self._update_template_state()
-        self._save_widget_change("cli.save_text", save_switch)
+        self._update_start_button_text()
+        self._save_widget_change("cli.template", template_switch)
 
     def _update_template_state(self):
-        load_switch = self.cli_widgets.get("load_text")
-        save_switch = self.cli_widgets.get("save_text")
-        template_switch = self.cli_widgets.get("template")
-
-        if not all([load_switch, save_switch, template_switch]):
-            return
-
-        if load_switch.get() == 1 or save_switch.get() == 1:
+        # This function is no longer needed for disabling, but we keep it for now
+        # to avoid breaking calls to it. It will just ensure the switch is normal.
+        template_switch = self.parameter_widgets.get("cli.template")
+        if template_switch:
             template_switch.configure(state="normal")
+
+    CURRENT_VERSION = "1.3"
+
+    def check_for_updates(self):
+        try:
+            response = requests.get("https://raw.githubusercontent.com/hgmzhn/manga-translator-ui/main/updates/cpu/version.json")
+            if response.status_code == 200:
+                latest_version = response.json()["version"]
+                if latest_version > self.CURRENT_VERSION:
+                    if messagebox.askyesno("发现新版本", f"检测到新版本 {latest_version}。是否要打开下载页面？"):
+                        webbrowser.open("https://github.com/hgmzhn/manga-translator-ui/releases")
         else:
-            template_switch.deselect()
-            template_switch.configure(state="disabled")
-            self._save_widget_change("cli.template", template_switch)
+                    messagebox.showinfo("无更新", "您使用的已是最新版本。")
+            else:
+                messagebox.showerror("更新失败", "无法检查更新。请稍后重试。")
+        except Exception as e:
+            messagebox.showerror("更新失败", f"检查更新时发生错误: {e}")
 
 # Views现在可以直接访问导入的模块
 

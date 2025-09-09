@@ -100,6 +100,8 @@ class MouseEventHandler:
 
         if len(self.selected_indices) == 1:
             region_index = list(self.selected_indices)[0]
+            if region_index >= len(self.regions):
+                return None
             region = self.regions[region_index]
             if not isinstance(region, dict): return None
 
@@ -132,7 +134,7 @@ class MouseEventHandler:
 
         # 检查是否在选中的区域内（只有按住Ctrl时才移动整个文本框）
         for i in self.selected_indices:
-            if self.is_point_in_region(img_x, img_y, self.regions[i]):
+            if i < len(self.regions) and self.is_point_in_region(img_x, img_y, self.regions[i]):
                 return {'type': 'move', 'region_index': i}  # 添加区域索引信息
 
         for i, region in reversed(list(enumerate(self.regions))):
@@ -861,21 +863,9 @@ class MouseEventHandler:
                 transformed_polygons.append(transformed_poly)
             
             # 第二阶段：矫正每个矩形的斜率（斜率保持）
-            for i, (original_poly, transformed_poly) in enumerate(zip(all_world_polygons, transformed_polygons)):
-                # 获取原始矩形的角度
-                orig_points_np = np.array(original_poly, dtype=np.float32)
-                orig_rect = cv2.minAreaRect(orig_points_np)
-                original_angle = orig_rect[2]
-                
-                # 获取变换后矩形的参数
-                trans_points_np = np.array(transformed_poly, dtype=np.float32)
-                trans_rect = cv2.minAreaRect(trans_points_np)
-                (trans_center_x, trans_center_y), (trans_width, trans_height), trans_angle = trans_rect
-                
-                # 重构矩形：保持变换后的中心和尺寸，但使用原始角度
-                corrected_rect = ((trans_center_x, trans_center_y), (trans_width, trans_height), original_angle)
-                corrected_poly = cv2.boxPoints(corrected_rect).tolist()
-                new_world_polygons.append(corrected_poly)
+            # FIX: This stage was unstable and caused angle flickering.
+            # The affine transform in stage 1 is sufficient.
+            new_world_polygons = transformed_polygons
             
             # 重新计算整体中心点
             all_new_vertices_world = [vertex for poly in new_world_polygons for vertex in poly]

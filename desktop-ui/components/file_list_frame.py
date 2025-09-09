@@ -5,15 +5,16 @@ import os
 from tkinter import messagebox
 
 class FileListFrame(ctk.CTkFrame):
-    def __init__(self, parent, on_file_select: Callable[[str], None], on_load_files: Callable, on_load_folder: Callable, on_file_unload: Callable[[str], None] = None):
+    def __init__(self, parent, on_file_select: Callable[[str], None], on_load_files: Callable, on_load_folder: Callable, on_file_unload: Callable[[str], None] = None, on_clear_list_requested: Callable[[], None] = None):
         super().__init__(parent)
         self.on_file_select = on_file_select
         self.on_load_files = on_load_files
         self.on_load_folder = on_load_folder
         self.on_file_unload = on_file_unload
+        self.on_clear_list_requested = on_clear_list_requested
         self.file_paths: List[str] = []
         self.current_selection = None
-        self.file_frames = {}  # 用于追踪文件对应的frame
+        self.file_frames = {}
 
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -21,13 +22,15 @@ class FileListFrame(ctk.CTkFrame):
         # --- Header and Buttons ---
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-        header_frame.grid_columnconfigure(1, weight=1)
 
-        self.load_file_button = ctk.CTkButton(header_frame, text="Load Files", command=self.on_load_files, width=100)
+        self.load_file_button = ctk.CTkButton(header_frame, text="添加图片", command=self.on_load_files, width=90)
         self.load_file_button.pack(side="left", padx=(0, 5))
 
-        self.load_folder_button = ctk.CTkButton(header_frame, text="Load Folder", command=self.on_load_folder, width=100)
-        self.load_folder_button.pack(side="left")
+        self.load_folder_button = ctk.CTkButton(header_frame, text="添加文件夹", command=self.on_load_folder, width=90)
+        self.load_folder_button.pack(side="left", padx=(0, 5))
+
+        self.clear_list_button = ctk.CTkButton(header_frame, text="清空列表", command=self.on_clear_list_requested, width=90)
+        self.clear_list_button.pack(side="left")
 
         # --- Scrollable File List ---
         self.scrollable_frame = ctk.CTkScrollableFrame(self)
@@ -45,7 +48,6 @@ class FileListFrame(ctk.CTkFrame):
         entry_frame.pack(fill="x", padx=5, pady=3)
         entry_frame.grid_columnconfigure(1, weight=1)
         
-        # 保存file_path和frame的映射关系
         self.file_frames[file_path] = entry_frame
 
         try:
@@ -64,7 +66,6 @@ class FileListFrame(ctk.CTkFrame):
         name_label = ctk.CTkLabel(entry_frame, text=file_name, anchor="w")
         name_label.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        # 添加卸载按钮
         unload_button = ctk.CTkButton(
             entry_frame, 
             text="✕", 
@@ -90,16 +91,13 @@ class FileListFrame(ctk.CTkFrame):
             self.on_file_select(file_path)
     
     def _on_unload_file(self, file_path: str):
-        """卸载文件，询问用户是否保存"""
         if self.on_file_unload:
             self.on_file_unload(file_path)
     
     def remove_file(self, file_path: str):
-        """从列表中移除文件（由外部调用）"""
         if file_path in self.file_paths:
             self.file_paths.remove(file_path)
             
-            # 移除对应的frame
             if file_path in self.file_frames:
                 frame = self.file_frames[file_path]
                 if self.current_selection == frame:
@@ -108,3 +106,11 @@ class FileListFrame(ctk.CTkFrame):
                 del self.file_frames[file_path]
                 
             print(f"已从列表中移除文件: {os.path.basename(file_path)}")
+
+    def clear_files(self):
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        self.file_paths.clear()
+        self.file_frames.clear()
+        self.current_selection = None
+        print("File list cleared.")

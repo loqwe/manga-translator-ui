@@ -537,9 +537,15 @@ class MangaTranslator:
             'original_height': original_height
         }
 
-        if self.save_mask:
-            mask_raw_data = ctx.mask_raw.tolist() if ctx.mask_raw is not None else None
-            data_to_save['mask_raw'] = mask_raw_data
+        if self.save_mask and ctx.mask_raw is not None:
+            try:
+                import base64
+                import cv2
+                _, buffer = cv2.imencode('.png', ctx.mask_raw)
+                mask_base64 = base64.b64encode(buffer).decode('utf-8')
+                data_to_save['mask_raw'] = mask_base64
+            except Exception as e:
+                logger.error(f"Failed to encode mask to base64: {e}")
 
         data[image_key] = data_to_save
 
@@ -633,7 +639,18 @@ class MangaTranslator:
                 logger.error(f"Failed to parse a region in {text_file_path}: {e}")
                 continue
         
-        mask_raw = np.array(mask_raw_data, dtype=np.uint8) if mask_raw_data is not None else None
+        mask_raw = None
+        if isinstance(mask_raw_data, str):
+            try:
+                import base64
+                import cv2
+                img_bytes = base64.b64decode(mask_raw_data)
+                img_array = np.frombuffer(img_bytes, dtype=np.uint8)
+                mask_raw = cv2.imdecode(img_array, cv2.IMREAD_UNCHANGED)
+            except Exception as e:
+                logger.error(f"Failed to decode base64 mask: {e}")
+        elif isinstance(mask_raw_data, list):
+            mask_raw = np.array(mask_raw_data, dtype=np.uint8)
         
         logger.info(f"Loaded {len(regions)} regions from {text_file_path}")
         if mask_raw is not None:
@@ -876,15 +893,6 @@ class MangaTranslator:
 
         if hasattr(ctx, 'pipeline_should_stop') and ctx.pipeline_should_stop:
             ctx.result = ctx.input
-            return ctx
-
-        # === 新增：仅保存文本模式的快速退出逻辑 ===
-        if self.save_text and not self.template:
-            logger.info("Save Text only mode: Skipping rendering and inpainting.")
-            # We need to set a result for the context, otherwise it might fail later
-            # Using None as a placeholder result to prevent image export
-            ctx.result = None 
-            # We can also skip the upscale reversion by returning early
             return ctx
 
         await self._report_progress('after-translating')

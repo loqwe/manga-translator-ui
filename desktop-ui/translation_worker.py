@@ -175,60 +175,75 @@ def main():
             flush_print(traceback.format_exc())
             return
         
-        # 处理每个文件
-        for i, file_path in enumerate(resolved_files):
-            flush_print(f"\n=== [{i+1}/{len(resolved_files)}] 处理文件: {os.path.basename(file_path)} ===")
+        # Create the event loop ONCE
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
-            try:
-                # 加载图片
-                flush_print(f"  -> 加载图片: {os.path.basename(file_path)}")
-                image = Image.open(file_path)
-                image.name = file_path
-                flush_print(f"  -> 图片尺寸: {image.size}")
-                
-                flush_print(f"  -> 开始翻译处理...")
-                
-                # 异步翻译
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                ctx = loop.run_until_complete(translator.translate(image, config, image_name=image.name))
-                loop.close()
-                
-                # 检查任务是否成功
-                # 在仅保存文本模式下，ctx.result为None也是一种成功状态
-                cli_params = config_dict.get('cli', {})
-                save_text_mode = cli_params.get('save_text', False)
-                task_successful = (ctx and ctx.result) or (ctx and save_text_mode and ctx.result is None)
+        # Get the list of input folders to create subdirectories
+        input_folders = {os.path.normpath(path) for path in input_files if os.path.isdir(path)}
 
-                if task_successful:
-                    if ctx.result:
-                        os.makedirs(output_folder, exist_ok=True)
-                        output_filename = "translated_" + os.path.basename(file_path)
-                        final_output_path = os.path.join(output_folder, output_filename)
+        try:
+            # 处理每个文件
+            for i, file_path in enumerate(resolved_files):
+                flush_print(f"\n=== [{i+1}/{len(resolved_files)}] 处理文件: {os.path.basename(file_path)} ===")
+
+                try:
+                    # 加载图片
+                    flush_print(f"  -> 加载图片: {os.path.basename(file_path)}")
+                    image = Image.open(file_path)
+                    image.name = file_path
+                    flush_print(f"  -> 图片尺寸: {image.size}")
+                    
+                    flush_print(f"  -> 开始翻译处理...")
+                    
+                    # 异步翻译
+                    ctx = loop.run_until_complete(translator.translate(image, config, image_name=image.name))
+                    
+                    # 检查任务是否成功
+                    # 在仅保存文本模式下，ctx.result为None也是一种成功状态
+                    cli_params = config_dict.get('cli', {})
+                    save_text_mode = cli_params.get('save_text', False)
+                    task_successful = (ctx and ctx.result) or (ctx and save_text_mode and ctx.result is None)
+
+                    if task_successful:
+                        if ctx.result:
+                            # Determine final output directory
+                            final_output_dir = output_folder
+                            parent_dir = os.path.normpath(os.path.dirname(file_path))
+                            for folder in input_folders:
+                                if parent_dir.startswith(folder):
+                                    final_output_dir = os.path.join(output_folder, os.path.basename(folder))
+                                    break
+                            
+                            os.makedirs(final_output_dir, exist_ok=True)
+                            output_filename = os.path.basename(file_path)
+                            final_output_path = os.path.join(final_output_dir, output_filename)
+                            
+                            image_to_save = ctx.result
+                            if final_output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
+                                image_to_save = image_to_save.convert('RGB')
+                            
+                            image_to_save.save(final_output_path)
+                            flush_print(f"  -> ✅ 翻译完成: {os.path.basename(final_output_path)}")
+                        else:
+                            flush_print(f"  -> ✅ 文本导出成功: {os.path.basename(file_path)}")
                         
-                        image_to_save = ctx.result
-                        if final_output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
-                            image_to_save = image_to_save.convert('RGB')
-                        
-                        image_to_save.save(final_output_path)
-                        flush_print(f"  -> ✅ 翻译完成: {os.path.basename(final_output_path)}")
+                        # 显示识别的文本信息
+                        if hasattr(ctx, 'text_regions') and ctx.text_regions:
+                            flush_print(f"  -> 识别到 {len(ctx.text_regions)} 个文本区域")
+                            for j, region in enumerate(ctx.text_regions[:3]):  # 只显示前3个
+                                text = getattr(region, 'text', '') or getattr(region, 'translation', '')
+                                if text:
+                                    flush_print(f"     区域{j+1}: {text[:50]}{'...' if len(text) > 50 else ''}")
                     else:
-                        flush_print(f"  -> ✅ 文本导出成功: {os.path.basename(file_path)}")
-                    
-                    # 显示识别的文本信息
-                    if hasattr(ctx, 'text_regions') and ctx.text_regions:
-                        flush_print(f"  -> 识别到 {len(ctx.text_regions)} 个文本区域")
-                        for j, region in enumerate(ctx.text_regions[:3]):  # 只显示前3个
-                            text = getattr(region, 'text', '') or getattr(region, 'translation', '')
-                            if text:
-                                flush_print(f"     区域{j+1}: {text[:50]}{'...' if len(text) > 50 else ''}")
-                else:
-                    flush_print(f"  -> ❌ 翻译失败: {os.path.basename(file_path)}")
-                    
-            except Exception as e:
-                flush_print(f"  -> ❌ 处理文件时出错 {os.path.basename(file_path)}: {e}")
-                import traceback
-                flush_print(traceback.format_exc())
+                        flush_print(f"  -> ❌ 翻译失败: {os.path.basename(file_path)}")
+                        
+                except Exception as e:
+                    flush_print(f"  -> ❌ 处理文件时出错 {os.path.basename(file_path)}: {e}")
+                    import traceback
+                    flush_print(traceback.format_exc())
+        finally:
+            loop.close()
         
         flush_print("\n=== 翻译进程完成 ===")
         
@@ -245,6 +260,7 @@ def main():
                 flush_print(f"已清理临时配置文件: {config_file}")
         except Exception as e:
             flush_print(f"清理临时文件出错: {e}")
+
 
 if __name__ == '__main__':
     main()

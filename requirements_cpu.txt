@@ -63,3 +63,4 @@ groq
 torchsummary
 open_clip_torch
 python-bidi
+pyupdater>=4.0.0

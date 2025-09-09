@@ -42,11 +42,11 @@ class EditorToolbar(ctk.CTkFrame):
             command=lambda: self._execute_callback('export_image')
         )
         
-        self.save_btn = ctk.CTkButton(
+        self.edit_btn = ctk.CTkButton(
             self.file_frame, 
-            text="💾 保存", 
+            text="编辑", 
             width=70,
-            command=lambda: self._execute_callback('save_file')
+            command=lambda: self._execute_callback('edit_file')
         )
         
         # 编辑操作组
@@ -142,7 +142,7 @@ class EditorToolbar(ctk.CTkFrame):
         self.file_frame.grid(row=0, column=0, padx=(5, 10), pady=5, sticky="w")
         self.back_btn.pack(side="left", padx=2)
         self.export_btn.pack(side="left", padx=2)
-        self.save_btn.pack(side="left", padx=2)
+        self.edit_btn.pack(side="left", padx=2)
         
         # 编辑操作
         self.edit_frame.grid(row=0, column=1, padx=10, pady=5, sticky="w")
