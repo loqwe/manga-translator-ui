@@ -1,4 +1,3 @@
-
 import subprocess
 import sys
 import os
@@ -12,7 +11,6 @@ APP_NAME = "MangaTranslatorUI"
 
 def run_command_realtime(cmd, cwd=None):
     """实时执行一个 shell 命令并打印输出。"""
-    # 在Windows上，如果命令是列表，需要用shell=False，如果是字符串，则用shell=True
     use_shell = isinstance(cmd, str)
     print(f"\nExecuting: {cmd}")
     try:
@@ -54,18 +52,26 @@ class Builder:
         print("=" * 60)
 
         venv_path = Path(f".venv_{version_type}")
+        req_file = f"requirements_{version_type}.txt"
         spec_file = f"manga-translator-{version_type}.spec"
 
         if not venv_path.exists() or not Path(spec_file).exists():
             print(f"Error: Environment for {version_type} not found. Please set it up first.")
             return False
 
-        # 获取虚拟环境中的python解释器路径
         python_exe = venv_path / 'Scripts' / 'python.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'python'
+        
+        # 安装所有依赖
+        print(f"Installing dependencies for {version_type.upper()} from {req_file}...")
+        cmd_install = [str(python_exe), '-m', 'pip', 'install', '-r', req_file]
+        if not run_command_realtime(cmd_install):
+            print(f"Dependency installation failed for {version_type.upper()}.")
+            return False
 
         # 运行 PyInstaller
-        cmd = [str(python_exe), "-m", "PyInstaller", spec_file]
-        if not run_command_realtime(cmd):
+        print(f"Running PyInstaller for {version_type.upper()}...")
+        cmd_pyinstaller = [str(python_exe), "-m", "PyInstaller", spec_file]
+        if not run_command_realtime(cmd_pyinstaller):
             print(f"PyInstaller build failed for {version_type.upper()}.")
             return False
         
@@ -81,32 +87,20 @@ class Builder:
         venv_path = Path(f".venv_{version_type}")
         tufup_exe = venv_path / 'Scripts' / 'tufup.exe' if sys.platform == 'win32' else venv_path / 'bin' / 'tufup'
 
-        # tufup 需要从 VERSION 文件读取版本号
-        self.version_file.write_text(self.app_version)
+        self.version_file.write_text(self.app_version, encoding='utf-8')
 
-        # 定义可执行文件路径
-        if version_type == 'cpu':
-            dist_dir = Path("dist") / f"manga-translator-{version_type}"
-        else:
-            dist_dir = Path("dist") / f"manga-translator-{version_type}"
+        dist_dir = Path("dist") / f"manga-translator-{version_type}"
         exe_path = dist_dir / EXE_NAME
 
         if not exe_path.exists():
             print(f"\nError: Executable not found at '{exe_path}'")
-            print("Please build the application first.")
             return False
 
-        # 添加新版本到tufup仓库
         cmd_add = [str(tufup_exe), 'targets', 'add', str(dist_dir), self.app_version, '--app-path', str(exe_path)]
-        if not run_command_realtime(cmd_add):
-            print(f"'tufup targets add' command failed for {version_type.upper()}.")
-            return False
+        if not run_command_realtime(cmd_add): return False
         
-        # 正式发布版本
         cmd_release = [str(tufup_exe), 'release']
-        if not run_command_realtime(cmd_release):
-            print(f"'tufup release' command failed for {version_type.upper()}.")
-            return False
+        if not run_command_realtime(cmd_release): return False
             
         print(f"Successfully created update package for {version_type.upper()} {self.app_version}.")
         return True

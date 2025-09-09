@@ -1,4 +1,9 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+--index-url https://download.pytorch.org/whl/cpu
+
+torch
+torchvision
+torchaudio
+
 aiofiles
 aiohttp
 aioshutil
@@ -37,9 +42,6 @@ PyHyphen
 PySide6
 pytest
 python-dotenv
-pytorch-lightning
-regex
-requests
 rich
 rusty_manga_image_translator
 safetensors
@@ -63,4 +65,4 @@ groq
 torchsummary
 open_clip_torch
 python-bidi
-tufup 
+tufup
