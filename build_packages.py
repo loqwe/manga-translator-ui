@@ -74,20 +74,11 @@ class Builder:
         repo_path = Path(REPO_DIR)
         (repo_path / 'targets').mkdir(parents=True, exist_ok=True)
 
-        # --- DEBUG START ---
-        print(f"[DEBUG] Using repository directory: {repo_path.resolve()}")
-        metadata_path = repo_path / 'metadata'
-        print(f"[DEBUG] Checking for metadata directory: {metadata_path.resolve()}")
-        if metadata_path.exists() and metadata_path.is_dir():
-            print("[DEBUG] Metadata directory found. Contents:")
-            try:
-                for item in os.listdir(metadata_path):
-                    print(f"[DEBUG]   - {item}")
-            except Exception as e:
-                print(f"[DEBUG]   - Error listing contents: {e}")
-        else:
-            print("[DEBUG] Metadata directory not found or is not a directory.")
-        # --- DEBUG END ---
+        # Clean up potentially problematic metadata files before loading
+        suspicious_file = repo_path / 'metadata' / '1.root.json'
+        if suspicious_file.exists():
+            print(f"Warning: Deleting suspicious '1.root.json' to prevent repository load failure.")
+            os.remove(suspicious_file)
         
         self.repo = Repository(
             repo_dir=repo_path,
@@ -96,20 +87,11 @@ class Builder:
             app_version_attr=APP_VERSION_ATTR
         )
 
-        # --- DEBUG START ---
-        print(f"[DEBUG] tufup.Repository instantiated. self.repo.roles is: {self.repo.roles}")
-        # --- DEBUG END ---
-
+        # The repository should load correctly now. If not, something else is wrong.
         if self.repo.roles is None:
-            print("Repository not found or incomplete. Initializing...")
-            self.repo.initialize()
-            # --- DEBUG START ---
-            print(f"[DEBUG] Repository initialized. self.repo.roles is now: {self.repo.roles}")
-            # --- DEBUG END ---
-        else:
-            # --- DEBUG START ---
-            print("[DEBUG] Repository already initialized. Skipping initialization.")
-            # --- DEBUG END ---
+            print("Error: Repository metadata is missing or corrupt, and could not be loaded.")
+            print("Please ensure the 'update_repository/metadata' directory is valid or run with --create-keys to start fresh.")
+            sys.exit(1)
 
     def create_keys(self):
         """Create new keys if they don't exist."""
@@ -188,6 +170,10 @@ class Builder:
         print(f"Adding update package for {version_type.upper()}")
         print("=" * 60)
 
+        # Create a variant-specific version string
+        variant_app_version = f"{self.app_version}-{version_type}"
+        print(f"Using variant version: {variant_app_version}")
+
         self.version_file.write_text(self.app_version, encoding='utf-8')
         dist_dir = Path("dist") / f"manga-translator-{version_type}"
 
@@ -198,7 +184,7 @@ class Builder:
         print(f"Adding bundle from: {dist_dir}")
         self.repo.add_bundle(
             new_bundle_dir=dist_dir,
-            new_version=self.app_version,
+            new_version=variant_app_version, # Use the new variant-specific version
             custom_metadata={'variant': version_type},
             required=False,
             skip_patch=True
