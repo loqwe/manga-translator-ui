@@ -173,7 +173,6 @@ class Builder:
         print(f"Adding update package for {version_type.upper()}")
         print("=" * 60)
 
-        # For GPU, we skip the auto-update process entirely as per user decision
         if version_type == 'gpu':
             print("Skipping TUF packaging for GPU version.")
             return True
@@ -185,24 +184,32 @@ class Builder:
             print(f"\nError: Bundle directory not found at '{dist_dir}'")
             return False
 
-        print(f"Creating full archive from: {dist_dir} to serve as a future base package.")
-        # Step 1: Always create the full archive. This places it in the `targets`
-        # directory, making it the "Base Package" for the next workflow run.
-        # It will NOT be registered as a client-facing target.
-        archive_path = self.repo.create_archive(
-            bundle_dir=dist_dir,
-            version=self.app_version,
-            custom_metadata={'variant': version_type}
+        # Step 1: Create the base bundle. This creates the .tar.gz file but we will
+        # prevent it from being registered in the final metadata if patches are made.
+        print(f"Creating bundle from: {dist_dir} to serve as a future base package.")
+        self.repo.add_bundle(
+            new_bundle_dir=dist_dir,
+            new_version=self.app_version,
+            custom_metadata={'variant': version_type},
+            skip_patch=True  # We will create patches manually
         )
 
+        # Step 2: Manually create patches.
         print("Attempting to create patches...")
-        # Step 2: Try to create patches. `tufup` automatically adds them to metadata if successful.
         patch_paths = self.repo.create_patches()
 
+        # Step 3: IMPORTANT - manually remove the full bundle target from the metadata
+        # if patches were successfully created. This ensures clients only see the patches.
         if patch_paths:
-            print(f'Created {len(patch_paths)} patch(es). These will be the only update targets registered in metadata.')
+            print(f'Created {len(patch_paths)} patch(es). Removing full bundle from metadata.')
+            # The bundle is always the last target added in the current list
+            bundle_target = self.repo.trusted_targets.pop()
+            print(f"Removed target: {bundle_target.path}")
         else:
             print('No patches created (first release). No client-facing update targets will be added to metadata for this version.')
+            # Also remove the bundle here, to enforce the "never register full bundle" rule
+            bundle_target = self.repo.trusted_targets.pop()
+            print(f"Removed target from metadata: {bundle_target.path}")
 
         return True
 
