@@ -63,6 +63,36 @@ jobs:
       with:
         fetch-depth: 0
 
+    - name: Restore Previous TUF Assets
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        echo "Checking for previous release to restore assets for diffing..."
+        # Get the tag of the release before this one
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+        if [ -z "$PREVIOUS_TAG" ]; then
+          echo "No previous tag found. Assuming this is the first release. Skipping asset restore."
+          exit 0
+        fi
+        echo "Found previous release tag: $PREVIOUS_TAG"
+        
+        TUF_TARGETS_DIR="update_repository/targets"
+        mkdir -p $TUF_TARGETS_DIR
+
+        echo "Downloading assets from release $PREVIOUS_TAG..."
+        gh release download $PREVIOUS_TAG -D $TUF_TARGETS_DIR -p "*.tar.gz.7z.*"
+        
+        echo "Merging split archives..."
+        for f in $(find $TUF_TARGETS_DIR -name '*.tar.gz.7z.001'); do
+          echo "Merging $f..."
+          # The `e` command extracts and automatically merges multi-part archives
+          7z e -o"$TUF_TARGETS_DIR" "$f"
+          # Clean up the downloaded split parts
+          rm $f*
+        done
+        echo "Asset restoration complete. Final files in $TUF_TARGETS_DIR:"
+        ls -l $TUF_TARGETS_DIR
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -79,7 +109,23 @@ jobs:
       with:
         path: dist/
 
-    - name: Update TUF Repository
+    - name: Restore TUF Private Keys
+      env:
+        TUF_ROOT_KEY: ${{ secrets.TUF_ROOT_KEY }}
+        TUF_TARGETS_KEY: ${{ secrets.TUF_TARGETS_KEY }}
+        TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
+        TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
+      run: |
+        echo "Restoring TUF private keys from secrets..."
+        KEYS_DIR="keys"
+        mkdir -p $KEYS_DIR
+        echo "$TUF_ROOT_KEY" > "$KEYS_DIR/root"
+        echo "$TUF_TARGETS_KEY" > "$KEYS_DIR/targets"
+        echo "$TUF_SNAPSHOT_KEY" > "$KEYS_DIR/snapshot"
+        echo "$TUF_TIMESTAMP_KEY" > "$KEYS_DIR/timestamp"
+        echo "Private keys restored."
+
+    """    - name: Update TUF Repository
       run: |
         python build_packages.py ${{ github.ref_name }} --update-repo --skip-build
 
@@ -122,6 +168,21 @@ jobs:
         cd dist/manga-translator-gpu/
         7z a -v1990m -m0=lzma2 -ms=on ../../release_assets/manga-translator-gpu-${{ github.ref_name }}.7z .
 
+    - name: Prepare TUF Assets for Release
+      run: |
+        echo "Preparing TUF assets..."
+        TUF_TARGETS_DIR="update_repository/targets"
+        RELEASE_ASSETS_DIR="release_assets"
+        # Copy any TUF assets that are small enough directly
+        find $TUF_TARGETS_DIR -type f -size -1990M -exec cp {} $RELEASE_ASSETS_DIR/ \;
+        # For TUF assets that are too large, create split archives
+        find $TUF_TARGETS_DIR -type f -size +1990M | while read f; do
+          echo "Splitting large TUF asset: $f"
+          7z a -v1990m "$RELEASE_ASSETS_DIR/$(basename "$f").7z" "$f"
+        done
+        echo "Final release assets list:"
+        ls -l $RELEASE_ASSETS_DIR
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v1
       with:
@@ -130,3 +191,4 @@ jobs:
         files: release_assets/*
         draft: false
         prerelease: false
+""
