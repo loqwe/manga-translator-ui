@@ -190,11 +190,12 @@ class TextBlock(object):
         return np.mean(norm_h / norm_v)
 
     @cached_property
-    def unrotated_size(self) -> Tuple[int, int]:
+    def unrotated_size(self) -> Tuple[float, float]:
         """Returns width and height of unrotated bbox"""
-        middle_pts = (self.min_rect[:, [1, 2, 3, 0]] + self.min_rect) / 2
-        norm_h = np.linalg.norm(middle_pts[:, 1] - middle_pts[:, 3])
-        norm_v = np.linalg.norm(middle_pts[:, 2] - middle_pts[:, 0])
+        polygons = self.min_rect.reshape(-1, 4, 2)
+        middle_pts = (polygons[:, [1, 2, 3, 0]] + polygons) / 2
+        norm_h = np.mean(np.linalg.norm(middle_pts[:, 1] - middle_pts[:, 3], axis=1))
+        norm_v = np.mean(np.linalg.norm(middle_pts[:, 2] - middle_pts[:, 0], axis=1))
         return norm_h, norm_v
 
     @cached_property

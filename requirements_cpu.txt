@@ -40,7 +40,7 @@ py3langid
 pyclipper
 pydantic
 PyHyphen
-PySide6
+PyQt6
 pytest
 python-dotenv
 rich

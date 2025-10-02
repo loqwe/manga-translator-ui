@@ -1,0 +1,1610 @@
+import copy
+import os
+import sys
+
+import cv2
+import numpy as np
+import torch
+from PIL import Image
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
+
+from editor.commands import Command, UpdateRegionCommand
+from services import (
+    get_async_service,
+    get_config_service,
+    get_file_service,
+    get_history_service,
+    get_logger,
+    get_ocr_service,
+    get_translation_service,
+)
+
+from .editor_model import EditorModel
+from .desktop_ui_geometry import get_polygon_center
+
+# 添加项目根目录到路径以便导入path_manager
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from manga_translator.utils.path_manager import find_inpainted_path
+
+
+class EditorController(QObject):
+    """
+    编辑器控制器 (Controller)
+
+    负责处理编辑器的所有业务逻辑和用户交互。
+    它响应来自视图(View)的信号，调用服务(Service)执行任务，并更新模型(Model)。
+    """
+    # Signal for thread-safe model updates
+    _update_refined_mask = pyqtSignal(object)
+    _update_display_mask_type = pyqtSignal(str)
+    _regions_update_finished = pyqtSignal(list)
+
+    def __init__(self, model: EditorModel, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.view = None  # 将在 EditorView 中设置
+        self.logger = get_logger(__name__)
+
+        # 获取所需的服务
+        self.ocr_service = get_ocr_service()
+        self.translation_service = get_translation_service()
+        self.async_service = get_async_service()
+        self.history_service = get_history_service() # 用于撤销/重做
+        self.file_service = get_file_service()
+        self.config_service = get_config_service()
+
+        # 增量修复缓存
+        self._last_inpainted_image = None  # 上一次完整的修复结果
+        
+        # DEBUG: 测试历史记录功能
+        self._last_processed_mask = None   # 上一次处理的蒙版状态
+
+        # Connect internal signals for thread-safe updates
+        self._update_refined_mask.connect(self.model.set_refined_mask)
+        self._update_display_mask_type.connect(self.model.set_display_mask_type)
+        self._regions_update_finished.connect(self.on_regions_update_finished) # New connection
+        self.logger.info("[CONTROLLER LOG] Internal signals connected to model methods")
+
+        self._connect_model_signals()
+
+    def set_view(self, view):
+        """设置view引用，用于更新UI状态"""
+        self.view = view
+        # 初始化撤销/重做按钮状态
+        self._update_undo_redo_buttons()
+
+    def _connect_model_signals(self):
+        """监听模型的变化，可能需要触发一些后续逻辑"""
+        self.model.regions_changed.connect(self.on_regions_changed)
+        # 监听蒙版编辑后触发 inpainting
+        self.model.refined_mask_changed.connect(self.on_refined_mask_changed)
+
+    def on_regions_changed(self, regions):
+        """模型中的区域数据变化时的槽函数"""
+        # print(f"Controller: Regions changed, {len(regions)} regions total.")
+        # This is a placeholder for where you might trigger a repaint or update.
+        # For example, if you have a graphics scene, you might update it here.
+        pass
+
+    def on_refined_mask_changed(self, mask):
+        """refined mask 变化时的槽函数，触发增量 inpainting"""
+        self.logger.info("!!! Refined mask changed signal received !!!")
+        self.logger.info("Refined mask changed, checking for incremental inpainting...")
+
+        # 检查是否有必要的数据来进行 inpainting
+        image = self.model.get_image()
+        raw_mask = self.model.get_raw_mask()  # 获取原始蒙版用于比较
+
+        if image is not None and mask is not None and raw_mask is not None:
+            self.logger.info("All data available, starting incremental inpainting task...")
+            # 计算差异蒙版（只包含用户编辑的部分）
+            self.async_service.submit_task(self._async_incremental_inpaint(mask, raw_mask))
+        else:
+            self.logger.warning(f"Incremental inpainting skipped: image={image is not None}, mask={mask is not None}, raw_mask={raw_mask is not None}")
+
+    @pyqtSlot(dict)
+    def update_multiple_translations(self, translations: dict):
+        """
+        批量更新多个区域的译文。
+        `translations` 是一个 {index: text} 格式的字典。
+        """
+        if not translations:
+            return
+
+        for index, text in translations.items():
+            self.model.update_region_data(index, 'translation', text)
+
+        # 一次性通知视图更新
+        self.model.regions_changed.emit(self.model.get_regions())
+
+    def _run_on_main_thread(self, func, *args):
+        """确保一个函数在主GUI线程上运行"""
+        def wrapper():
+            try:
+                args_info = [f'(Type: {type(arg)}, Shape: {getattr(arg, "shape", "N/A")})' for arg in args]
+                self.logger.info(f"[CONTROLLER LOG] Executing on main thread: {func.__name__} with args: {args_info}")
+                result = func(*args)
+                self.logger.info(f"[CONTROLLER LOG] Successfully executed {func.__name__}")
+                return result
+            except Exception as e:
+                self.logger.error(f"[CONTROLLER LOG] Error executing {func.__name__}: {e}")
+                raise
+        QTimer.singleShot(0, wrapper)
+
+    # --- 公共槽函数 (Public Slots) ---
+
+    def has_unsaved_changes(self) -> bool:
+        """检查是否有未保存的编辑"""
+        return self.history_service.can_undo()
+
+    def _clear_editor_state(self):
+        """清空编辑器状态"""
+        self.logger.info("Clearing editor state")
+
+        # 清空模型数据
+        self.model.set_regions([])
+        self.model.set_raw_mask(None)
+        self.model.set_refined_mask(None)
+        self.model.set_inpainted_image(None)
+        self.model.set_selection([])
+
+        # 清空历史记录
+        self.history_service.clear()
+
+        # 清空缓存
+        self._last_inpainted_image = None
+        self._last_processed_mask = None
+
+        # 清空渲染参数缓存
+        from services import get_render_parameter_service
+        render_parameter_service = get_render_parameter_service()
+        render_parameter_service.clear_cache()
+
+        self.logger.info("Editor state cleared")
+
+    def _is_translated_image(self, image_path: str) -> bool:
+        """
+        检查图片是否是翻译后的图片（通过translation_map.json）
+
+        Args:
+            image_path: 图片路径
+
+        Returns:
+            True if 是翻译后的图片, False otherwise
+        """
+        try:
+            import json
+            norm_path = os.path.normpath(image_path)
+            output_dir = os.path.dirname(norm_path)
+            map_path = os.path.join(output_dir, 'translation_map.json')
+
+            self.logger.info(f"Checking if translated image: {image_path}")
+            self.logger.info(f"Normalized path: {norm_path}")
+            self.logger.info(f"Looking for translation_map.json at: {map_path}")
+
+            if os.path.exists(map_path):
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    translation_map = json.load(f)
+                self.logger.info(f"Found translation_map.json with {len(translation_map)} entries")
+                self.logger.info(f"Translation map keys: {list(translation_map.keys())[:3]}...")  # 只显示前3个
+                # 如果当前路径是translation_map的key，说明是翻译后的图片
+                if norm_path in translation_map:
+                    self.logger.info(f"✓ Found translation mapping for: {image_path}")
+                    return True
+                else:
+                    self.logger.info(f"✗ No translation mapping found for: {norm_path}")
+            else:
+                self.logger.info(f"✗ translation_map.json not found at: {map_path}")
+        except Exception as e:
+            self.logger.error(f"Error checking translation map: {e}")
+
+        return False
+
+    def load_image_and_regions(self, image_path: str):
+        """加载图像及其关联的区域数据，并触发后台处理"""
+        self.logger.info(f"Controller: Loading image {image_path}")
+
+        # 检查是否有未保存的编辑
+        if self.has_unsaved_changes():
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.question(
+                None,
+                "未保存的编辑",
+                "当前图片有未保存的编辑,是否导出?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel
+            )
+
+            if reply == QMessageBox.StandardButton.Cancel:
+                self.logger.info("User cancelled loading new image")
+                return
+            elif reply == QMessageBox.StandardButton.Yes:
+                # 导出当前图片
+                self.export_image()
+                # 等待导出完成(这里简化处理,实际可能需要异步等待)
+                import time
+                time.sleep(0.5)
+
+        # 清空旧状态
+        self._clear_editor_state()
+
+        try:
+            image = Image.open(image_path)
+
+            # 检查是否是翻译后的图片（通过translation_map.json）
+            is_translated_image = self._is_translated_image(image_path)
+
+            if is_translated_image:
+                # 翻译后的图片：只作为查看器，不加载JSON
+                self.logger.info(f"Detected translated image, loading as viewer only: {image_path}")
+                self.model.set_source_image_path(image_path)
+
+                # 先设置透明度，再设置图片
+                # 翻译后的图片本身就是最终结果，所以原图alpha应该是1.0（完全显示）
+                self.model.set_original_image_alpha(1.0)  # 完全不透明，显示翻译后的图片
+
+                self.model.set_image(image)
+                self.model.set_regions([])  # 不加载regions
+                self.model.set_raw_mask(None)
+                self.model.set_refined_mask(None)
+                self.model.set_inpainted_image_path(None)
+                # 不触发后台处理
+                return
+
+            # 原图或无翻译映射的图片：正常加载JSON
+            # Call FileService to handle JSON loading and parsing
+            regions, raw_mask, original_size = self.file_service.load_translation_json(image_path)
+
+            # First, import render parameters from the loaded JSON data
+            if regions:
+                from services import get_render_parameter_service
+                render_parameter_service = get_render_parameter_service()
+                for i, region_data in enumerate(regions):
+                    render_parameter_service.import_parameters_from_json(i, region_data)
+
+            # Update model with the data from the service
+            self.model.set_source_image_path(image_path) # Save the path
+
+            # 先设置透明度，再设置图片（因为set_image会触发on_image_changed，需要正确的透明度值）
+            # 原图alpha = 0.0 -> 原图完全透明（不可见）-> 显示inpainted
+            self.model.set_original_image_alpha(0.0) # 完全透明，显示inpainted图片
+
+            self.model.set_image(image)
+            self.model.set_regions(regions)
+
+            if raw_mask is not None:
+                self.model.set_raw_mask(raw_mask)
+                self.logger.info(f"Raw mask loaded with shape: {raw_mask.shape}")
+
+            self.model.set_refined_mask(None) # Initially, no refined mask is ready
+
+            # 检查是否存在已有的inpainted图片
+            inpainted_path = find_inpainted_path(image_path)
+            if inpainted_path:
+                self.model.set_inpainted_image_path(inpainted_path)
+                self.logger.info(f"Found existing inpainted image: {inpainted_path}")
+                # 加载inpainted图片并触发信号
+                try:
+                    inpainted_image = Image.open(inpainted_path)
+                    self.model.set_inpainted_image(inpainted_image)
+                    self.logger.info(f"Loaded inpainted image: {inpainted_path}")
+                except Exception as e:
+                    self.logger.error(f"Error loading inpainted image: {e}")
+                    self.model.set_inpainted_image_path(None)
+            else:
+                self.model.set_inpainted_image_path(None)
+                self.model.set_inpainted_image(None)
+
+            # If regions were loaded, trigger background processing
+            if regions:
+                self.logger.info("JSON data loaded, background processing is temporarily disabled.")
+                self.async_service.submit_task(self._async_refine_and_inpaint())
+
+        except Exception as e:
+            self.logger.error(f"Error loading image and regions: {e}", exc_info=True)
+            self.model.set_image(None)
+            self.model.set_regions([])
+            self.model.set_raw_mask(None)
+            self.model.set_refined_mask(None)
+
+    async def _async_refine_and_inpaint(self):
+        """Asynchronously refines the mask and generates an inpainting preview."""
+        try:
+            self.logger.info("Starting async mask refinement and inpainting...")
+            image = self.model.get_image()
+            raw_mask = self.model.get_raw_mask() # Use the raw mask for refinement
+            regions = self.model.get_regions()
+
+            if image is None or raw_mask is None or not regions:
+                self.logger.warning("Refinement/Inpainting skipped: image, mask, or regions not available.")
+                return
+
+            # 延迟导入后端模块
+            try:
+                from manga_translator.config import (
+                    Inpainter,
+                    InpainterConfig,
+                    InpaintPrecision,
+                )
+                from manga_translator.inpainting import dispatch as inpaint_dispatch
+                from manga_translator.mask_refinement import (
+                    dispatch as refine_mask_dispatch,
+                )
+                from manga_translator.utils import TextBlock
+            except ImportError as e:
+                self.logger.error(f"Failed to import backend modules: {e}")
+                return
+
+            # 1. Refine Mask
+            image_np = np.array(image.convert("RGB"))
+            text_blocks = [TextBlock(**region_data) for region_data in regions]
+            raw_mask_2d = cv2.cvtColor(raw_mask, cv2.COLOR_BGR2GRAY) if len(raw_mask.shape) == 3 else raw_mask
+            raw_mask_contiguous = np.ascontiguousarray(raw_mask_2d, dtype=np.uint8)
+
+            # 从配置服务获取mask参数
+            config = self.config_service.get_config()
+            dilation_offset = config.mask_dilation_offset
+            kernel_size = config.kernel_size
+            ignore_bubble = config.ocr.ignore_bubble
+
+            refined_mask = await refine_mask_dispatch(
+                text_blocks, image_np, raw_mask_contiguous, method='fit_text',
+                dilation_offset=dilation_offset, ignore_bubble=ignore_bubble, kernel_size=kernel_size
+            )
+
+            self.logger.info(f"[CONTROLLER LOG] Refined mask generated. Type: {type(refined_mask)}, Shape: {getattr(refined_mask, 'shape', 'N/A')}")
+
+            if refined_mask is None:
+                self.logger.error("Mask refinement failed.")
+                return
+
+            # Ensure refined_mask is a valid numpy array
+            if not isinstance(refined_mask, np.ndarray):
+                self.logger.error(f"Refined mask is not a numpy array: {type(refined_mask)}")
+                return
+
+            if refined_mask.size == 0:
+                self.logger.error("Refined mask is empty")
+                return
+
+            self.logger.info("Using direct model update approach")
+            self.logger.info(f"[CONTROLLER LOG] About to update refined mask directly. Mask shape: {refined_mask.shape}")
+
+            # Since we're already in an async context that should be thread-safe for PyQt signals,
+            # let's try direct calls
+            self.model.set_refined_mask(refined_mask)
+            self.logger.info("[CONTROLLER LOG] Refined mask update completed")
+
+            # 不自动显示refined mask，让用户自己决定是否显示
+            # self.model.set_display_mask_type('refined')
+
+            self.logger.info("Mask refinement successful.")
+
+            # 2. Inpaint Image - 检查是否已有inpainted图片
+            inpainted_path = self.model.get_inpainted_image_path()
+            if inpainted_path and os.path.exists(inpainted_path):
+                # 已有inpainted图片，直接加载
+                self.logger.info(f"Loading existing inpainted image from: {inpainted_path}")
+                try:
+                    inpainted_image = Image.open(inpainted_path)
+                    inpainted_image_np = np.array(inpainted_image.convert("RGB"))
+
+                    self.model.set_inpainted_image(inpainted_image)
+
+                    # 缓存完整修复结果，用于后续增量修复
+                    self._last_inpainted_image = inpainted_image_np.copy()
+                    self._last_processed_mask = refined_mask.copy()
+
+                    self.logger.info("Existing inpainted image loaded successfully. Skipping inpainting step.")
+                except Exception as e:
+                    self.logger.error(f"Failed to load existing inpainted image: {e}")
+                    # 如果加载失败，继续执行inpainting
+                    inpainted_path = None
+
+            # 如果没有已有的inpainted图片，执行inpainting
+            if not inpainted_path or not os.path.exists(inpainted_path):
+                self.logger.info("Starting inpainting process...")
+                try:
+                    # 从配置服务获取inpainter配置
+                    config = self.config_service.get_config()
+                    inpainter_config_model = config.inpainter
+
+                    # 创建InpainterConfig实例并应用配置
+                    inpainter_config = InpainterConfig()
+                    inpainter_config.inpainting_precision = InpaintPrecision(inpainter_config_model.inpainting_precision)
+
+                    # 从配置获取inpainter模型
+                    inpainter_name = inpainter_config_model.inpainter
+                    try:
+                        inpainter_key = Inpainter(inpainter_name)
+                    except ValueError:
+                        self.logger.warning(f"Unknown inpainter model: {inpainter_name}, defaulting to lama_large")
+                        inpainter_key = Inpainter.lama_large
+
+                    # 从配置获取inpainting尺寸
+                    inpainting_size = inpainter_config_model.inpainting_size
+
+                    # 从配置获取GPU设置
+                    cli_config = config.cli
+                    use_gpu = cli_config.use_gpu
+                    device = 'cuda' if use_gpu and torch.cuda.is_available() else 'cpu'
+
+                    self.logger.info(f"Using inpainter config: Model={inpainter_key.value}, Size={inpainting_size}, Device={device}")
+
+                    inpainted_image_np = await inpaint_dispatch(
+                        inpainter_key=inpainter_key,
+                        image=image_np,
+                        mask=refined_mask,
+                        config=inpainter_config,
+                        inpainting_size=inpainting_size,
+                        device=device
+                    )
+
+                    if inpainted_image_np is not None:
+                        inpainted_image = Image.fromarray(inpainted_image_np)
+                        self.model.set_inpainted_image(inpainted_image)
+
+                        # 缓存完整修复结果，用于后续增量修复
+                        self._last_inpainted_image = inpainted_image_np.copy()
+                        self._last_processed_mask = refined_mask.copy()
+
+                        self.logger.info("Inpainting successful. Model updated and cached for incremental updates.")
+                    else:
+                        self.logger.error("Inpainting failed, returned None.")
+
+                except Exception as e:
+                    self.logger.error(f"Error during inpainting process: {e}", exc_info=True)
+
+        except Exception as e:
+            self.logger.error(f"Error during async refine and inpaint: {e}")
+
+    async def _async_incremental_inpaint(self, current_mask, original_mask):
+        """边界框局部修复 - 只修复变化区域的矩形边界框"""
+        try:
+            self.logger.info("Starting bounding box incremental inpainting...")
+            image = self.model.get_image()
+
+            if image is None or current_mask is None:
+                self.logger.warning("Incremental inpainting skipped: missing data.")
+                return
+
+            # 检查是否有缓存
+            if self._last_processed_mask is None:
+                self.logger.info("No cached mask, falling back to full inpainting...")
+                await self._async_full_inpaint_with_cache(current_mask)
+                return
+
+            # 确保蒙版是2D灰度图
+            if len(current_mask.shape) > 2:
+                current_mask_2d = cv2.cvtColor(current_mask, cv2.COLOR_BGR2GRAY)
+            else:
+                current_mask_2d = current_mask.copy()
+
+            if len(self._last_processed_mask.shape) > 2:
+                last_mask_2d = cv2.cvtColor(self._last_processed_mask, cv2.COLOR_BGR2GRAY)
+            else:
+                last_mask_2d = self._last_processed_mask.copy()
+
+            # 计算所有变化区域
+            added_areas = cv2.subtract(current_mask_2d, last_mask_2d)
+            removed_areas = cv2.subtract(last_mask_2d, current_mask_2d)
+            all_changed_areas = cv2.bitwise_or(added_areas, removed_areas)
+
+            self.logger.info(f"Added areas: {np.sum(added_areas > 128)} pixels")
+            self.logger.info(f"Removed areas: {np.sum(removed_areas > 128)} pixels")
+
+            if np.sum(all_changed_areas) == 0:
+                self.logger.info("No changes detected, skipping update.")
+                return
+
+            # 计算变化区域的边界框
+            coords = np.where(all_changed_areas > 128)
+            if len(coords[0]) == 0:
+                return
+
+            y_min, y_max = np.min(coords[0]), np.max(coords[0])
+            x_min, x_max = np.min(coords[1]), np.max(coords[1])
+
+            # 扩展边界框
+            padding = 50
+            h, w = current_mask_2d.shape
+            y_min = max(0, y_min - padding)
+            y_max = min(h, y_max + padding + 1)
+            x_min = max(0, x_min - padding)
+            x_max = min(w, x_max + padding + 1)
+
+            bbox_w = x_max - x_min
+            bbox_h = y_max - y_min
+
+            self.logger.info(f"Bounding box: ({x_min}, {y_min}) to ({x_max}, {y_max}), size: {bbox_w}x{bbox_h}")
+
+            # 裁剪原图和当前蒙版的对应区域
+            image_np = np.array(image.convert("RGB"))
+            bbox_image = image_np[y_min:y_max, x_min:x_max]
+            bbox_mask = current_mask_2d[y_min:y_max, x_min:x_max]
+
+            # 获取配置和执行局部inpainting
+            config = self.config_service.get_config()
+            inpainter_config_model = config.inpainter
+
+            try:
+                from manga_translator.config import (
+                    Inpainter,
+                    InpainterConfig,
+                    InpaintPrecision,
+                )
+                from manga_translator.inpainting import dispatch as inpaint_dispatch
+            except ImportError as e:
+                self.logger.error(f"Failed to import backend modules: {e}")
+                return
+
+            inpainter_config = InpainterConfig()
+            inpainter_config.inpainting_precision = InpaintPrecision(inpainter_config_model.inpainting_precision)
+
+            inpainter_name = inpainter_config_model.inpainter
+            try:
+                inpainter_key = Inpainter(inpainter_name)
+            except ValueError:
+                inpainter_key = Inpainter.lama_large
+
+            inpainting_size = inpainter_config_model.inpainting_size
+            cli_config = config.cli
+            device = 'cuda' if cli_config.use_gpu and torch.cuda.is_available() else 'cpu'
+
+            self.logger.info(f"Using bounding box inpainter: Model={inpainter_key.value}, BBox={bbox_w}x{bbox_h}, Device={device}")
+
+            # 局部修复：原图矩形区域 + 对应蒙版
+            bbox_result = await inpaint_dispatch(
+                inpainter_key=inpainter_key,
+                image=bbox_image,  # 裁剪的原图区域
+                mask=bbox_mask,    # 裁剪的蒙版区域
+                config=inpainter_config,
+                inpainting_size=inpainting_size,
+                device=device
+            )
+
+            if bbox_result is not None:
+                self.logger.info(f"Bounding box inpainting successful, result shape: {bbox_result.shape}")
+
+                # 将局部修复结果贴回完整图像
+                if self._last_inpainted_image is None:
+                    full_result = image_np.copy()
+                else:
+                    full_result = self._last_inpainted_image.copy()
+
+                # 把修复结果贴回对应位置
+                full_result[y_min:y_max, x_min:x_max] = bbox_result
+
+                # 更新缓存
+                self._last_inpainted_image = full_result.copy()
+                self._last_processed_mask = current_mask_2d.copy()
+
+                # 更新模型
+                final_image = Image.fromarray(full_result)
+                self.model.set_inpainted_image(final_image)
+
+                self.logger.info("Bounding box incremental inpainting successful.")
+            else:
+                self.logger.error("Bounding box inpainting failed.")
+
+        except Exception as e:
+            self.logger.error(f"Error during bounding box inpainting: {e}", exc_info=True)
+
+    async def _async_full_inpaint_with_cache(self, mask):
+        """执行完整修复并缓存结果"""
+        try:
+            self.logger.info("Performing full inpainting with caching...")
+            image = self.model.get_image()
+
+            if image is None or mask is None:
+                return
+
+            # 延迟导入后端模块
+            try:
+                from manga_translator.config import (
+                    Inpainter,
+                    InpainterConfig,
+                    InpaintPrecision,
+                )
+                from manga_translator.inpainting import dispatch as inpaint_dispatch
+            except ImportError as e:
+                self.logger.error(f"Failed to import backend modules: {e}")
+                return
+
+            image_np = np.array(image.convert("RGB"))
+
+            # 确保蒙版是2D灰度图
+            if len(mask.shape) > 2:
+                mask_2d = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_2d = mask.copy()
+
+            # 获取配置
+            config = self.config_service.get_config()
+            inpainter_config_model = config.inpainter
+
+            inpainter_config = InpainterConfig()
+            inpainter_config.inpainting_precision = InpaintPrecision(inpainter_config_model.inpainting_precision)
+
+            inpainter_name = inpainter_config_model.inpainter
+            try:
+                inpainter_key = Inpainter(inpainter_name)
+            except ValueError:
+                self.logger.warning(f"Unknown inpainter model: {inpainter_name}, defaulting to lama_large")
+                inpainter_key = Inpainter.lama_large
+
+            inpainting_size = inpainter_config_model.inpainting_size
+
+            cli_config = config.cli
+            use_gpu = cli_config.use_gpu
+            device = 'cuda' if use_gpu and torch.cuda.is_available() else 'cpu'
+
+            inpainted_image_np = await inpaint_dispatch(
+                inpainter_key=inpainter_key,
+                image=image_np,
+                mask=mask_2d,
+                config=inpainter_config,
+                inpainting_size=inpainting_size,
+                device=device
+            )
+
+            if inpainted_image_np is not None:
+                # 缓存结果
+                self._last_inpainted_image = inpainted_image_np.copy()
+                self._last_processed_mask = mask_2d.copy()
+
+                # 更新模型
+                inpainted_image = Image.fromarray(inpainted_image_np)
+                self.model.set_inpainted_image(inpainted_image)
+
+                self.logger.info("Full inpainting with cache successful.")
+            else:
+                self.logger.error("Full inpainting failed, returned None.")
+
+        except Exception as e:
+            self.logger.error(f"Error during full inpainting with cache: {e}", exc_info=True)
+
+    @pyqtSlot(list)
+    def select_region(self, region_indices):
+        self.model.set_selection(region_indices)
+
+    @pyqtSlot(str, bool)
+    def set_display_mask_type(self, mask_type: str, visible: bool):
+        """Slot to control which mask is displayed ('raw' or 'refined') or if none is."""
+        if visible:
+            self.model.set_display_mask_type(mask_type)
+        else:
+            self.model.set_display_mask_type('none')
+
+    @pyqtSlot(bool)
+    def set_removed_mask_visible(self, visible: bool):
+        """Slot to control visibility of removed mask parts."""
+        self.model.set_removed_mask_visible(visible)
+        self.logger.info(f"Set removed mask visible: {visible}")
+
+    @pyqtSlot(str)
+    def set_active_tool(self, tool: str):
+        """Sets the active tool in the model (e.g., 'pen', 'eraser')."""
+        self.model.set_active_tool(tool)
+
+    @pyqtSlot(bool)
+    def set_geometry_edit_mode(self, enabled: bool):
+        """Slot to enable or disable the geometry edit mode."""
+        if enabled:
+            selected_indices = self.model.get_selection()
+            if len(selected_indices) != 1:
+                self.logger.warning("Geometry edit mode requires a single region to be selected.")
+                if self.view:
+                    self.view.toolbar.edit_geometry_button.setChecked(False)
+                return
+            self.logger.info("Entering geometry edit mode.")
+            self.set_active_tool('geometry_edit')
+        else:
+            self.logger.info("Exiting geometry edit mode.")
+            self.set_active_tool('select')
+
+    @pyqtSlot(int)
+    def set_brush_size(self, size: int):
+        """Sets the brush size in the model."""
+        self.model.set_brush_size(size)
+
+    @pyqtSlot(dict)
+    def update_mask_config(self, new_settings: dict):
+        """Slot to update mask settings in the config service."""
+        self.config_service.update_config(new_settings)
+        self.logger.info(f"Mask config updated with: {new_settings}")
+
+
+
+    @pyqtSlot(int, str)
+    def update_translated_text(self, region_index: int, text: str):
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('translation') == text:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['translation'] = text
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Translation Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, str)
+    def update_original_text(self, region_index: int, text: str):
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('original_text') == text:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['original_text'] = text
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Original Text Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, int)
+    def update_font_size(self, region_index: int, size: int):
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('font_size') == size:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['font_size'] = size
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Font Size Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, str)
+    def update_font_color(self, region_index: int, color: str):
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('font_color') == color:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['font_color'] = color
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Font Color Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, str)
+    def update_alignment(self, region_index: int, alignment_text: str):
+        """槽：响应UI中的对齐方式修改"""
+        alignment_map = {"自动": "auto", "左对齐": "left", "居中": "center", "右对齐": "right"}
+        alignment_value = alignment_map.get(alignment_text, "auto")
+
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('alignment') == alignment_value:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['alignment'] = alignment_value
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Alignment to {alignment_value}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, dict)
+    def update_region_geometry(self, region_index: int, new_region_data: dict):
+        """处理来自视图的区域几���变化。"""
+        # 现在RegionTextItem在调用callback之前不会修改self.region_data
+        # 所以我们可以从模型中获取正确的旧数据
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data:
+            return
+            
+        # 深拷贝以避免引用问题
+        old_region_data = copy.deepcopy(old_region_data)
+        
+        
+
+        # --- UNDO DEBUGGING ---
+        self.logger.debug("--- Creating Undo Command ---")
+        self.logger.debug(f"OLD_DATA (before command): angle={old_region_data.get('angle')}, polygons[0][0]={old_region_data.get('polygons')[0][0] if old_region_data.get('polygons') else 'N/A'}")
+        self.logger.debug(f"NEW_DATA (from view): angle={new_region_data.get('angle')}, polygons[0][0]={new_region_data.get('polygons')[0][0] if new_region_data.get('polygons') else 'N/A'}")
+        # --- END UNDO DEBUGGING ---
+
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Resize/Move/Rotate Region {region_index}"
+        )
+        self.execute_command(command)
+
+    @pyqtSlot(int, str)
+    def update_direction(self, region_index: int, direction_text: str):
+        """槽：响应UI中的方向修改"""
+        direction_map = {"自动": "auto", "横排": "h", "竖排": "v"}
+        direction_value = direction_map.get(direction_text, "auto")
+
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data or old_region_data.get('direction') == direction_value:
+            return
+
+        new_region_data = old_region_data.copy()
+        new_region_data['direction'] = direction_value
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Update Direction to {direction_value}"
+        )
+        self.execute_command(command)
+
+    def execute_command(self, command: Command):
+        """执行命令并更新UI"""
+        if command:
+            self.history_service.execute_command(command)
+            self._update_undo_redo_buttons()
+
+    def undo(self):
+        self.logger.info("Undo operation requested")
+        command = self.history_service.undo()
+        if command:
+            self.logger.info(f"Executing undo for command: {command.description}")
+            command.undo()
+            self.logger.info("Undo operation completed")
+        else:
+            self.logger.warning("No command available to undo")
+        self._update_undo_redo_buttons()
+
+    def redo(self):
+        command = self.history_service.redo()
+        if command:
+            command.execute()
+        self._update_undo_redo_buttons()
+
+    @pyqtSlot(int, list)
+    def add_geometry_to_region(self, region_index: int, new_polygon_coords: list):
+        """Adds a new polygon (in image coordinates) to an existing region."""
+        self.logger.info(f"Controller: Adding new geometry to region {region_index}")
+        
+        old_region_data = self.model.get_region_by_index(region_index)
+        if not old_region_data:
+            self.logger.error(f"Invalid region index {region_index} for adding geometry.")
+            return
+
+        new_region_data = old_region_data.copy()
+        
+        if 'lines' not in new_region_data or not new_region_data['lines']:
+            new_region_data['lines'] = []
+        
+        # 获取原始数据
+        old_angle = old_region_data.get('angle', 0)
+
+        # 如果没有 center,从 lines 计算
+        if 'center' in old_region_data:
+            old_center = old_region_data['center']
+        else:
+            old_lines = old_region_data.get('lines', [])
+            if old_lines:
+                all_pts = [pt for ln in old_lines for pt in ln]
+                old_cx, old_cy = get_polygon_center(all_pts)
+                old_center = [old_cx, old_cy]
+            else:
+                old_center = [0, 0]
+
+        # new_polygon_coords 是旋转后的世界坐标,需要反旋转回模型坐标
+        from .desktop_ui_geometry import rotate_point
+
+        # 反旋转: 使用 -angle 将世界坐标转换为模型坐标
+        new_polygon_model = []
+        for x, y in new_polygon_coords:
+            # 反旋转: 围绕 old_center 旋转 -old_angle
+            x_model, y_model = rotate_point(x, y, -old_angle, old_center[0], old_center[1])
+            new_polygon_model.append([x_model, y_model])
+
+        # 追加未旋转的模型坐标
+        lines_old = list(new_region_data.get('lines', []))
+        lines_new = lines_old + [new_polygon_model]
+
+        # 重新计算 center
+        all_pts = [pt for ln in lines_new for pt in ln]
+        new_cx, new_cy = get_polygon_center(all_pts)
+
+        # 将 lines 转换到新的模型坐标系(以新中心为旋转中心)
+        # 这样可以保证视觉位置不变
+        final_lines_model = []
+        for poly_model in lines_new:
+            # 先转换到世界坐标(旋转)
+            poly_world = [rotate_point(x, y, old_angle, old_center[0], old_center[1]) for x, y in poly_model]
+            # 再转换回新的模型坐标系(反旋转,使用新的 center)
+            poly_new_model = [rotate_point(x, y, -old_angle, new_cx, new_cy) for x, y in poly_world]
+            final_lines_model.append(poly_new_model)
+
+        new_region_data['lines'] = final_lines_model
+        new_region_data['center'] = [new_cx, new_cy]
+
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Add Geometry to Region {region_index}"
+        )
+        self.execute_command(command)
+
+    # --- 右键菜单相关方法 ---
+    def ocr_regions(self, region_indices: list):
+        """对指定区域进行OCR识别，使用与UI按钮相同的逻辑"""
+        if not region_indices:
+            return
+        
+        # 临时保存当前选择
+        original_selection = self.model.get_selection()
+        
+        # 设置选择为要OCR的区域
+        self.model.set_selection(region_indices)
+        
+        # 调用现有的OCR方法（这会使用UI配置的OCR模型）
+        self.run_ocr_for_selection()
+        
+        # 恢复原始选择
+        self.model.set_selection(original_selection)
+
+    def translate_regions(self, region_indices: list):
+        """翻译指定区域的文本，使用与UI按钮相同的逻辑"""
+        if not region_indices:
+            return
+        
+        # 临时保存当前选择
+        original_selection = self.model.get_selection()
+        
+        # 设置选择为要翻译的区域
+        self.model.set_selection(region_indices)
+        
+        # 调用现有的翻译方法（这会使用UI配置的翻译器和目标语言）
+        self.run_translation_for_selection()
+        
+        # 恢复原始选择
+        self.model.set_selection(original_selection)
+
+    def copy_region(self, region_index: int):
+        """复制指定区域的数据"""
+        region_data = self.model.get_region_by_index(region_index)
+        if not region_data:
+            self.logger.error(f"区域 {region_index} 不存在")
+            return
+
+        # 将区域数据保存到历史服务的剪贴板
+        self.history_service.copy_to_clipboard(copy.deepcopy(region_data))
+        self.logger.info(f"已复制区域 {region_index}")
+
+    def paste_region_style(self, region_index: int):
+        """将复制的样式粘贴到指定区域"""
+        clipboard_data = self.history_service.paste_from_clipboard()
+        if not clipboard_data:
+            self.logger.warning("没有复制的区域数据")
+            return
+        
+        region_data = self.model.get_region_by_index(region_index)
+        if not region_data:
+            self.logger.error(f"区域 {region_index} 不存在")
+            return
+        
+        # 复制样式相关属性，但保留位置和文本
+        old_region_data = region_data.copy()
+        new_region_data = region_data.copy()
+        
+        # 复制样式属性
+        style_keys = ['font_family', 'font_size', 'font_color', 'alignment', 'direction', 'bold', 'italic']
+        for key in style_keys:
+            if key in clipboard_data:
+                new_region_data[key] = clipboard_data[key]
+        
+        command = UpdateRegionCommand(
+            model=self.model,
+            region_index=region_index,
+            old_data=old_region_data,
+            new_data=new_region_data,
+            description=f"Paste Style to Region {region_index}"
+        )
+        self.execute_command(command)
+
+    def delete_regions(self, region_indices: list):
+        """删除指定的区域
+
+        删除逻辑:
+        - 如果区域有紫色多边形(active_polygon_index >= 0),只删除那个多边形
+        - 如果区域没有紫色多边形(active_polygon_index == -1),删除整个区域
+        """
+        if not region_indices:
+            return
+
+        # 重置 _last_edited_region_index,确保删除操作触发完全更新
+        if self.view and hasattr(self.view, 'graphics_view'):
+            self.view.graphics_view._last_edited_region_index = None
+            self.logger.info("[DELETE] 重置 _last_edited_region_index 为 None")
+
+        # 按索引倒序处理，避免索引变化问题
+        sorted_indices = sorted(region_indices, reverse=True)
+
+        regions_to_delete = []  # 需要完全删除的区域索引
+
+        for region_index in sorted_indices:
+            if 0 <= region_index < len(self.model._regions):
+                # 获取对应的 region_item,检查 active_polygon_index
+                region_item = None
+                if self.view and hasattr(self.view, 'graphics_view'):
+                    graphics_view = self.view.graphics_view
+                    if hasattr(graphics_view, '_region_items') and region_index < len(graphics_view._region_items):
+                        region_item = graphics_view._region_items[region_index]
+
+                active_polygon_index = -1
+                if region_item and hasattr(region_item, 'active_polygon_index'):
+                    active_polygon_index = region_item.active_polygon_index
+
+                self.logger.info(f"[DELETE] Region {region_index}: active_polygon_index={active_polygon_index}")
+
+                # 获取区域数据
+                region_data = self.model._regions[region_index]
+                lines = region_data.get('lines', [])
+
+                if active_polygon_index >= 0 and active_polygon_index < len(lines):
+                    # 有紫色多边形,只删除那个多边形
+                    old_data = region_data.copy()
+                    new_data = region_data.copy()
+
+                    # 删除指定的多边形
+                    new_lines_model = [line for i, line in enumerate(lines) if i != active_polygon_index]
+
+                    if len(new_lines_model) == 0:
+                        # 如果删除后没有多边形了,删除整个区域
+                        regions_to_delete.append(region_index)
+                        self.logger.info(f"[DELETE] Region {region_index}: 删除最后一个多边形,将删除整个区域")
+                    else:
+                        # 获取旧的 center 和 angle
+                        old_center = region_data.get('center', [0, 0])
+                        old_angle = region_data.get('angle', 0)
+
+                        # 重新计算新的 center (基于剩余的多边形)
+                        from .desktop_ui_geometry import get_polygon_center, rotate_point
+                        all_pts = [pt for ln in new_lines_model for pt in ln]
+                        new_cx, new_cy = get_polygon_center(all_pts)
+
+                        # 为了保持视觉位置不变,需要将 lines 转换到新的坐标系
+                        # 步骤:
+                        # 1. 将旧的 lines (模型坐标) 转换为世界坐标 (旋转)
+                        # 2. 将世界坐标转换为新的模型坐标 (反旋转,使用新的 center)
+
+                        final_lines_model = []
+                        for poly_model in new_lines_model:
+                            # 转换为世界坐标
+                            poly_world = [rotate_point(x, y, old_angle, old_center[0], old_center[1]) for x, y in poly_model]
+                            # 转换为新的模型坐标
+                            poly_new_model = [rotate_point(x, y, -old_angle, new_cx, new_cy) for x, y in poly_world]
+                            final_lines_model.append(poly_new_model)
+
+                        # 更新数据
+                        new_data['lines'] = final_lines_model
+                        new_data['center'] = [new_cx, new_cy]
+
+                        # 创建更新命令
+                        command = UpdateRegionCommand(
+                            model=self.model,
+                            region_index=region_index,
+                            old_data=old_data,
+                            new_data=new_data,
+                            description=f"Delete Polygon {active_polygon_index} from Region {region_index}"
+                        )
+                        self.execute_command(command)
+                        self.logger.info(f"[DELETE] Region {region_index}: 已删除多边形 {active_polygon_index}, 新 center=({new_cx:.1f}, {new_cy:.1f})")
+                else:
+                    # 没有紫色多边形,删除整个区域
+                    regions_to_delete.append(region_index)
+
+        # 删除需要完全删除的区域
+        if regions_to_delete:
+            # regions_to_delete 已经是倒序的,直接从后往前删除
+            # 使用命令模式以支持撤销
+            from editor.commands import DeleteRegionCommand
+
+            for region_index in regions_to_delete:
+                if 0 <= region_index < len(self.model._regions):
+                    region_data = self.model._regions[region_index]
+                    command = DeleteRegionCommand(
+                        model=self.model,
+                        region_index=region_index,
+                        region_data=region_data,
+                        description=f"Delete Region {region_index}"
+                    )
+                    self.execute_command(command)
+
+            self.logger.info(f"[DELETE] 已删除 {len(regions_to_delete)} 个区域")
+
+        # 清除选择
+        self.model.set_selection([])
+
+    def enter_drawing_mode(self):
+        """进入绘制模式以添加新文本框"""
+        self.logger.info("进入文本框绘制模式")
+
+        # 如果当前在编辑形状模式下,先退出
+        if self.model.get_active_tool() == 'geometry_edit':
+            self.logger.info("当前在编辑形状模式下,先退出")
+            self.set_active_tool('select')
+
+        # 清除当前选择
+        self.model.set_selection([])
+
+        # 设置工具为绘制文本框
+        self.model.set_active_tool('draw_textbox')
+
+    def paste_region(self, mouse_pos=None):
+        """粘贴复制的区域到新位置
+
+        参数:
+            mouse_pos: 鼠标位置 (scene coordinates),如果提供则在该位置粘贴
+        """
+        clipboard_data = self.history_service.paste_from_clipboard()
+        if not clipboard_data:
+            self.logger.warning("没有复制的区域数据")
+            return
+
+        # 创建新区域
+        new_region_data = copy.deepcopy(clipboard_data)
+
+        # 计算原区域的中心点
+        if 'center' in new_region_data:
+            old_center_x, old_center_y = new_region_data['center']
+        elif 'lines' in new_region_data and new_region_data['lines']:
+            # 从 lines 计算中心点
+            all_points = [point for line in new_region_data['lines'] for point in line]
+            if all_points:
+                old_center_x = sum(p[0] for p in all_points) / len(all_points)
+                old_center_y = sum(p[1] for p in all_points) / len(all_points)
+            else:
+                old_center_x, old_center_y = 0, 0
+        else:
+            old_center_x, old_center_y = 0, 0
+
+        # 计算新的中心点
+        if mouse_pos:
+            # 如果提供了鼠标位置,在该位置粘贴
+            new_center_x, new_center_y = mouse_pos.x(), mouse_pos.y()
+        else:
+            # 否则稍微偏移避免重叠
+            new_center_x = old_center_x + 20
+            new_center_y = old_center_y + 20
+
+        # 计算偏移量
+        offset_x = new_center_x - old_center_x
+        offset_y = new_center_y - old_center_y
+
+        # 应用偏移到所有坐标
+        if 'center' in new_region_data:
+            new_region_data['center'] = [new_center_x, new_center_y]
+
+        if 'lines' in new_region_data and new_region_data['lines']:
+            for line in new_region_data['lines']:
+                for point in line:
+                    point[0] += offset_x
+                    point[1] += offset_y
+
+        if 'polygons' in new_region_data and new_region_data['polygons']:
+            for polygon in new_region_data['polygons']:
+                for point in polygon:
+                    point[0] += offset_x
+                    point[1] += offset_y
+
+        # 添加到模型 - 使用命令模式以支持撤销
+        from editor.commands import AddRegionCommand
+
+        command = AddRegionCommand(
+            model=self.model,
+            region_data=new_region_data,
+            description="Paste Region"
+        )
+        self.execute_command(command)
+
+        # 选中新粘贴的区域
+        new_index = len(self.model._regions) - 1
+        self.model.set_selection([new_index])
+
+        self.logger.info(f"已粘贴区域到位置 ({new_center_x:.0f}, {new_center_y:.0f})")
+
+    def _update_undo_redo_buttons(self):
+        """更新撤销/重做按钮的启用状态"""
+        can_undo = self.history_service.can_undo()
+        can_redo = self.history_service.can_redo()
+        
+        # 通过view更新工具栏按钮状态
+        if hasattr(self, 'view'):
+            if hasattr(self.view, 'toolbar'):
+                self.view.toolbar.update_undo_redo_state(can_undo, can_redo)
+        else:
+            print("DEBUG: Controller has no view attribute")
+
+    @pyqtSlot()
+    def open_file_dialog_and_load(self):
+        """Opens a file dialog and loads the selected image into the editor."""
+        from PyQt6.QtWidgets import QFileDialog
+
+        from services import ServiceManager
+
+        config_service = get_config_service()
+        last_dir = config_service.get_config().app.last_open_dir
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "打开图片文件",
+            last_dir,
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp)"
+        )
+        if file_path:
+            new_dir = os.path.dirname(file_path)
+            app_logic = ServiceManager.get_service('app_logic')
+            if app_logic:
+                app_logic.set_last_open_dir(new_dir)
+            self.load_image_and_regions(file_path)
+
+    # --- Toolbar Slots ---
+
+    @pyqtSlot()
+    def go_back(self):
+        self.logger.info("Toolbar: 'Back' requested. (Not Implemented)")
+        # This should likely signal the main window to switch views
+
+    @pyqtSlot()
+    def export_image(self):
+        """导出基于编辑器当前数据的图片（使用编辑器的蒙版和样式设置）"""
+        self.logger.info("Toolbar: 'Export Image' requested.")
+        try:
+            image = self.model.get_image()
+            regions = self.model.get_regions()
+            if not image or not regions:
+                self.logger.warning("Cannot export: missing image or regions data")
+                return
+
+            mask = self.model.get_refined_mask()
+            if mask is None:
+                mask = self.model.get_raw_mask()
+            if mask is None:
+                self.logger.warning("Cannot export: no mask data available")
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(None, "导出失败", "没有可用的蒙版数据，无法导出。")
+                return
+
+            self.async_service.submit_task(self._async_export_with_desktop_ui_service(image, regions, mask))
+        except Exception as e:
+            self.logger.error(f"Error during export request: {e}", exc_info=True)
+
+    async def _async_export_with_desktop_ui_service(self, image, regions, mask):
+        """使用desktop-ui导出服务进行异步导出"""
+        self.logger.info("Starting export using desktop-ui service...")
+        try:
+            import os
+
+            from PyQt6.QtCore import QTimer
+            from PyQt6.QtWidgets import QMessageBox
+
+            # 获取配置
+            config = self.config_service.get_config()
+
+            # 确定输出路径和文件名
+            output_dir = getattr(config.app, 'last_output_path', None) if hasattr(config, 'app') else None
+            if not output_dir or not os.path.exists(output_dir):
+                source_path = self.model.get_source_image_path()
+                if source_path:
+                    output_dir = os.path.dirname(source_path)
+                else:
+                    output_dir = os.getcwd()
+                self.logger.warning(f"Using fallback output directory: {output_dir}")
+            else:
+                self.logger.info(f"Using configured output directory: {output_dir}")
+
+            # 生成输出文件名（保持原文件名和格式）
+            source_path = self.model.get_source_image_path()
+            if source_path:
+                base_name = os.path.splitext(os.path.basename(source_path))[0]
+                # 获取输出格式
+                output_format = getattr(config.cli, 'format', '') if hasattr(config, 'cli') else ''
+                if output_format == "不指定":
+                    output_format = None
+
+                if output_format and output_format.strip():
+                    output_filename = f"{base_name}.{output_format.lower()}"
+                else:
+                    original_ext = os.path.splitext(source_path)[1].lower()
+                    output_filename = f"{base_name}{original_ext}" if original_ext else f"{base_name}.png"
+            else:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_filename = f"exported_image_{timestamp}.png"
+
+            output_path = os.path.join(output_dir, output_filename)
+
+
+            # 使用本地desktop_qt_ui的导出服务
+            import os
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+            from services.export_service import ExportService
+            export_service = ExportService()
+
+            def progress_callback(message):
+                self.logger.info(f"Export progress: {message}")
+
+            def success_callback(message):
+                self.logger.info(f"Export success: {message}")
+                QTimer.singleShot(0, lambda: QMessageBox.information(None, "导出成功", f"图片已成功导出到:\n{output_path}"))
+
+            def error_callback(message):
+                self.logger.error(f"Export error: {message}")
+                QTimer.singleShot(0, lambda: QMessageBox.critical(None, "导出失败", f"导出失败:\n{message}"))
+
+            # 转换配置为字典
+            if hasattr(config, 'model_dump'):
+                config_dict = config.model_dump()
+            elif hasattr(config, 'dict'):
+                config_dict = config.dict()
+            else:
+                config_dict = {}
+
+            # 添加调试信息
+            self.logger.info(f"Export called with {len(regions)} regions")
+            self.logger.info(f"Using output directory: {output_dir}")
+            self.logger.info(f"Output file: {output_path}")
+
+            for i, region in enumerate(regions[:3]):  # 只显示前3个区域的信息
+                self.logger.info(f"Region {i}: text='{region.get('text', '')[:20]}...', translation='{region.get('translation', '')[:20]}...', font_size={region.get('font_size')}, lines={type(region.get('lines'))}")
+                self.logger.info(f"Region {i} keys: {list(region.keys())}")
+
+            # 确保区域数据包含渲染所需的所有信息
+            enhanced_regions = []
+            for i, region in enumerate(regions):
+                enhanced_region = region.copy()
+
+                # 确保有翻译文本
+                if not enhanced_region.get('translation'):
+                    enhanced_region['translation'] = enhanced_region.get('text', '')
+
+                # 确保有字体大小
+                if not enhanced_region.get('font_size'):
+                    enhanced_region['font_size'] = 16
+
+                # 确保有对齐方式
+                if not enhanced_region.get('alignment'):
+                    enhanced_region['alignment'] = 'center'
+
+                # 确保有方向
+                if not enhanced_region.get('direction'):
+                    enhanced_region['direction'] = 'auto'
+
+                # 从渲染参数服务获取完整的渲染参数
+                from services import get_render_parameter_service
+                render_service = get_render_parameter_service()
+                render_params = render_service.export_parameters_for_backend(i, enhanced_region)
+                enhanced_region.update(render_params)
+
+                enhanced_regions.append(enhanced_region)
+
+            # 调用本地的导出服务
+            export_service.export_rendered_image(
+                image=image,
+                regions_data=enhanced_regions,  # 使用增强的区域数据
+                config=config_dict,
+                output_path=output_path,
+                mask=mask,
+                progress_callback=progress_callback,
+                success_callback=success_callback,
+                error_callback=error_callback
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error during async export: {e}", exc_info=True)
+            err_msg = str(e)
+            QTimer.singleShot(0, lambda: QMessageBox.critical(None, "导出失败", f"导出过程中发生意外错误:\n{err_msg}"))
+
+    @pyqtSlot()
+    def edit_source_file(self):
+        """加载当前翻译后图片对应的原图进行编辑"""
+        current_path = self.model.get_source_image_path()
+        if not current_path:
+            self.logger.warning("No image currently loaded")
+            return
+
+        # 检查当前是否是翻译后的图片
+        if not self._is_translated_image(current_path):
+            self.logger.info("Current image is already a source file, no need to switch")
+            return
+
+        # 从translation_map.json中查找原图路径
+        try:
+            import json
+            norm_path = os.path.normpath(current_path)
+            output_dir = os.path.dirname(norm_path)
+            map_path = os.path.join(output_dir, 'translation_map.json')
+
+            if os.path.exists(map_path):
+                with open(map_path, 'r', encoding='utf-8') as f:
+                    translation_map = json.load(f)
+
+                source_path = translation_map.get(norm_path)
+                if source_path and os.path.exists(source_path):
+                    self.logger.info(f"Loading source file for editing: {source_path}")
+                    self.load_image_and_regions(source_path)
+                else:
+                    self.logger.warning(f"Source file not found: {source_path}")
+            else:
+                self.logger.warning(f"translation_map.json not found at: {map_path}")
+        except Exception as e:
+            self.logger.error(f"Error loading source file: {e}")
+
+    @pyqtSlot(str)
+    def set_display_mode(self, mode_text: str):
+        """设置文本区域的显示模式"""
+        mode_map = {
+            "文字文本框显示": "full",
+            "只显示文字": "text_only",
+            "只显示框线": "box_only",
+            "都不显示": "none"
+        }
+        mode = mode_map.get(mode_text, "full")
+        self.logger.info(f"Toolbar: Display mode changed to '{mode_text}' -> '{mode}'.")
+        self.model.set_region_display_mode(mode)
+    
+    def set_green_box_visible(self, visible: bool):
+        """设置绿框（自动渲染区域）的可见性"""
+        if self.view and hasattr(self.view.graphics_view, '_region_items'):
+            for item in self.view.graphics_view._region_items:
+                if hasattr(item, 'set_green_box_visible'):
+                    item.set_green_box_visible(visible)
+    
+    def set_white_box_visible(self, visible: bool):
+        """设置白框（手动调整边界）的可见性"""
+        if self.view and hasattr(self.view.graphics_view, '_region_items'):
+            for item in self.view.graphics_view._region_items:
+                if hasattr(item, 'set_white_box_visible'):
+                    item.set_white_box_visible(visible)
+
+    @pyqtSlot(int)
+    def set_original_image_alpha(self, alpha: int):
+        """设置原图的不透明度 (0-100)，值越大越不透明（越显示原图）"""
+        # slider = 0 -> alpha = 0.0（完全透明，显示inpainted）
+        # slider = 100 -> alpha = 1.0（完全不透明，显示原图）
+        alpha_float = alpha / 100.0
+        self.model.set_original_image_alpha(alpha_float)
+
+    @pyqtSlot(int)
+    def set_preview_alpha(self, alpha: int):
+        self.logger.info(f"Toolbar: Preview alpha changed to '{alpha}'. (Not Implemented)")
+        # TODO: This should control the opacity of the inpainted image layer in the view
+
+    def handle_global_render_setting_change(self):
+        """Forces a re-render of all regions when a global render setting has changed."""
+        self.logger.info("Global render setting changed, forcing re-render of all regions.")
+        
+        # Clear the parameter service cache to ensure new global defaults are used
+        from services import get_render_parameter_service
+        render_parameter_service = get_render_parameter_service()
+        render_parameter_service.clear_cache()
+
+        # A heavy-handed but reliable way to force a full redraw of all regions with new global defaults
+        self.model.set_regions(self.model.get_regions())
+
+    @pyqtSlot()
+    def render_inpaint(self):
+        self.logger.info("Toolbar: 'Render Inpaint' requested.")
+        # This can trigger the same async task as the one after loading a json
+        self.async_service.submit_task(self._async_refine_and_inpaint())
+
+    @pyqtSlot()
+    def run_ocr_for_selection(self):
+        selected_indices = self.model.get_selection()
+        if not selected_indices:
+            return
+        image = self.model.get_image()
+        if not image:
+            return
+
+        all_regions = self.model.get_regions()
+        selected_regions_data = [all_regions[i] for i in selected_indices]
+        self.async_service.submit_task(self._async_ocr_task(image, selected_regions_data, selected_indices))
+
+    @pyqtSlot(list)
+    def on_regions_update_finished(self, updated_regions: list):
+        """Slot to safely update regions from the main thread."""
+        self.model.set_regions(updated_regions)
+
+    async def _async_ocr_task(self, image, regions_to_process, indices):
+        current_regions = self.model.get_regions()
+        updated_regions = list(current_regions) # Create a shallow copy of the list
+
+        for i, region_data in enumerate(regions_to_process):
+            region_idx = indices[i]
+            ocr_result = await self.ocr_service.recognize_region(image, region_data)
+            if ocr_result and ocr_result.text:
+                # Create a copy of the specific region dict to modify
+                new_region_data = updated_regions[region_idx].copy()
+                new_region_data['text'] = ocr_result.text
+                updated_regions[region_idx] = new_region_data # Replace the old dict with the new one
+
+        # Emit a signal to have the model updated on the main thread
+        self._regions_update_finished.emit(updated_regions)
+
+    @pyqtSlot()
+    def run_translation_for_selection(self):
+        selected_indices = self.model.get_selection()
+        if not selected_indices:
+            return
+        image = self.model.get_image()
+        if not image:
+            return
+
+        all_regions = self.model.get_regions()
+        selected_regions_data = [all_regions[i] for i in selected_indices]
+        texts_to_translate = [r.get('text', '') for r in selected_regions_data]
+        # 传递所有区域以提供上下文，但只翻译选中的文本
+        self.async_service.submit_task(self._async_translation_task(texts_to_translate, selected_indices, image, all_regions))
+
+    async def _async_translation_task(self, texts, indices, image, regions):
+        # 将image和所有regions信息传递给翻译服务以提供完整上下文
+        results = await self.translation_service.translate_text_batch(texts, image=image, regions=regions)
+        current_regions = self.model.get_regions()
+        updated_regions = list(current_regions) # Create a shallow copy
+
+        for i, result in enumerate(results):
+            if result and result.translated_text:
+                region_idx = indices[i]
+                # Create a copy of the specific region dict to modify
+                new_region_data = updated_regions[region_idx].copy()
+                new_region_data['translation'] = result.translated_text
+                updated_regions[region_idx] = new_region_data # Replace the old dict
+
+        # Emit a signal to have the model updated on the main thread
+        self._regions_update_finished.emit(updated_regions)
+
+    @pyqtSlot(list)
+    def set_selection_from_list(self, indices: list):
+        """Slot to handle selection changes originating from the RegionListView."""
+        self.model.set_selection(indices)
+
+    @pyqtSlot(list)
+    def on_backend_task_completed(self, results: list):
+        """
+        Slot to handle the completion of a backend task (like translation).
+        Reloads the data for the currently active image to show the result.
+        """
+        self.logger.info("Backend task finished, received results. Refreshing current editor view.")
+        current_source_path = self.model.get_source_image_path()
+        if not current_source_path:
+            self.logger.warning("No active image in editor to refresh.")
+            return
+
+        # Find the result for the current file
+        norm_current_path = os.path.normpath(current_source_path)
+        for result in results:
+            if hasattr(result, 'image_path') and os.path.normpath(result.image_path) == norm_current_path:
+                if result.success:
+                    self.logger.info(f"Result for {os.path.basename(current_source_path)} is success. Reloading.")
+                    # Re-load the image. The file service will now find the new translated file.
+                    self.load_image_and_regions(current_source_path)
+                else:
+                    error_message = getattr(result, 'error_message', 'Unknown error')
+                    self.logger.error(f"Backend task failed for {os.path.basename(current_source_path)}: {error_message}")
+                break

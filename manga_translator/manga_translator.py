@@ -1,5 +1,6 @@
 
 import asyncio
+import torch
 import cv2
 import json
 import langcodes
@@ -30,6 +31,11 @@ from .utils import (
     rgb2hex,
     TextBlock,
     imwrite_unicode
+)
+from .utils.path_manager import (
+    get_json_path,
+    get_inpainted_path,
+    find_json_path
 )
 
 from .detection import dispatch as dispatch_detection, prepare as prepare_detection, unload as unload_detection
@@ -406,24 +412,22 @@ class MangaTranslator:
         ctx.debug_folder = self._get_image_subfolder()
 
         if self.load_text:
-            # 加载文本+模板模式：先执行TXT导入JSON预处理
-            if self.template:
-                logger.info("Load text + Template mode: Importing TXT to JSON first...")
-                try:
-                    from services.workflow_service import smart_update_translations_from_images, get_template_path_from_config
-                    template_path = get_template_path_from_config()
-                    if template_path and os.path.exists(template_path):
-                        # 使用当前图片文件路径进行TXT导入JSON处理
-                        report = smart_update_translations_from_images([ctx.input], template_path)
-                        logger.info(f"TXT import result: {report}")
-                        if "错误" in report or "失败" in report:
-                            logger.warning("TXT import failed, but continuing with normal load text processing")
-                    else:
-                        logger.warning(f"Template file not found for import: {template_path}")
-                except Exception as e:
-                    logger.error(f"Failed to import TXT: {e}")
-                    logger.info("Continuing with normal load text processing despite import failure")
-            
+            # 加载文本模式：先尝试导入TXT到JSON
+            logger.info("Load text mode: Attempting to import TXT to JSON first...")
+            try:
+                from services.workflow_service import smart_update_translations_from_images, get_template_path_from_config
+                template_path = get_template_path_from_config()
+                if template_path and os.path.exists(template_path):
+                    # 使用当前图片文件路径进行TXT导入JSON处理
+                    report = smart_update_translations_from_images([ctx.image_name], template_path)
+                    logger.info(f"TXT import result: {report}")
+                    if "错误" in report or "失败" in report:
+                        logger.warning("TXT import failed, but continuing with normal load text processing")
+                else:
+                    logger.warning(f"Template file not found for import: {template_path}, skipping TXT import")
+            except Exception as e:
+                logger.error(f"Failed to import TXT: {e}, continuing with normal load text processing")
+
             logger.info("Attempting to load translation from file...")
             loaded_regions, loaded_mask, mask_is_refined = self._load_text_and_regions_from_file(ctx.image_name, config)
             if loaded_regions:
@@ -470,6 +474,10 @@ class MangaTranslator:
                 ctx.img_inpainted = await self._run_inpainting(config, ctx)
                 if self.verbose:
                     imwrite_unicode(self._result_path('inpainted.png'), cv2.cvtColor(ctx.img_inpainted, cv2.COLOR_RGB2BGR), logger)
+
+                # 保存inpainted图片到新目录结构
+                if hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
+                    self._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
 
                 # Rendering
                 await self._report_progress('rendering')
@@ -528,16 +536,18 @@ class MangaTranslator:
         return ctx
 
     def _save_text_to_file(self, image_path: str, ctx: Context):
+        """保存翻译数据到JSON文件，使用新的目录结构"""
         text_output_file = self.text_output_file
         if not text_output_file:
-            text_output_file = os.path.splitext(image_path)[0] + '_translations.json'
+            # 使用新的路径管理器生成JSON路径
+            text_output_file = get_json_path(image_path, create_dir=True)
 
         data = {}
         image_key = os.path.abspath(image_path)
-        
+
         # Prepare data for JSON serialization
         regions_data = [region.to_dict() for region in ctx.text_regions]
-        
+
         original_width, original_height = ctx.input.size
         data_to_save = {
             'regions': regions_data,
@@ -568,32 +578,44 @@ class MangaTranslator:
                     if isinstance(obj, np.ndarray):
                         return obj.tolist()
                     return super(NumpyEncoder, self).default(obj)
-            
+
             json_string = json.dumps(data, ensure_ascii=False, indent=4, cls=NumpyEncoder)
-            
+
             with open(text_output_file, 'wb') as f:
                 f.write(json_string.encode('utf-8'))
+            logger.info(f"JSON saved to: {text_output_file}")
         except Exception as e:
             logger.error(f"Failed to write translation file to {text_output_file}: {e}")
 
+    def _save_inpainted_image(self, image_path: str, inpainted_img: np.ndarray):
+        """保存修复后的图片到inpainted目录"""
+        try:
+            inpainted_path = get_inpainted_path(image_path, create_dir=True)
+            imwrite_unicode(inpainted_path, cv2.cvtColor(inpainted_img, cv2.COLOR_RGB2BGR), logger)
+            logger.info(f"Inpainted image saved to: {inpainted_path}")
+        except Exception as e:
+            logger.error(f"Failed to save inpainted image: {e}")
+
     def _load_text_and_regions_from_file(self, image_path: str, config: Config) -> (Optional[List[TextBlock]], Optional[np.ndarray], bool):
+        """加载翻译数据，支持新的目录结构和向后兼容"""
         if not image_path:
             return None, None, False
-            
-        base_path, _ = os.path.splitext(image_path)
-        text_file_path = base_path + '_translations.json'
 
-        if not os.path.exists(text_file_path):
-            # Also check for the old .txt format for backward compatibility
+        # 使用path_manager查找JSON文件（新位置优先）
+        text_file_path = find_json_path(image_path)
+
+        if not text_file_path:
+            # 检查旧的TXT格式
+            base_path, _ = os.path.splitext(image_path)
             text_file_path_txt = base_path + '_translations.txt'
-            if not os.path.exists(text_file_path_txt):
-                logger.info(f"Translation file not found: {text_file_path} or {text_file_path_txt}")
-                return None, None, False
-            else:
+            if os.path.exists(text_file_path_txt):
                 # If the old format is found, load from it
                 regions = self._load_text_and_regions_from_txt_file(image_path)
                 # Since old format doesn't have mask, we return None for mask and refined status
                 return regions, None, False
+            else:
+                logger.info(f"Translation file not found for: {image_path}")
+                return None, None, False
 
         try:
             # Force UTF-8 encoding to handle potential file encoding issues
@@ -897,19 +919,20 @@ class MangaTranslator:
                 self._save_text_to_file(ctx.image_name, ctx)
                 logger.info(f"JSON template saved for {os.path.basename(ctx.image_name)}.")
                 
-                # 直接导出TXT文件
+                # 直接导出TXT文件（原文）
                 try:
-                    json_path = os.path.splitext(ctx.image_name)[0] + '_translations.json'
-                    if os.path.exists(json_path):
-                        from services.workflow_service import generate_text_from_template, get_template_path_from_config
+                    json_path = find_json_path(ctx.image_name)
+                    if json_path and os.path.exists(json_path):
+                        from services.workflow_service import generate_original_text, get_template_path_from_config
                         template_path = get_template_path_from_config()
                         if template_path and os.path.exists(template_path):
-                            result = generate_text_from_template(json_path, template_path)
-                            logger.info(f"TXT export result: {result}")
+                            # 导出原文
+                            original_result = generate_original_text(json_path, template_path)
+                            logger.info(f"Original text export result: {original_result}")
                         else:
                             logger.warning(f"Template file not found: {template_path}")
                     else:
-                        logger.warning(f"JSON file not found for TXT export: {json_path}")
+                        logger.warning(f"JSON file not found for TXT export: {ctx.image_name}")
                 except Exception as e:
                     logger.error(f"Failed to export TXT: {e}")
             else:
@@ -976,9 +999,9 @@ class MangaTranslator:
         try:
             ctx.img_inpainted = await self._run_inpainting(config, ctx)
 
-        except Exception as e:  
-            logger.error(f"Error during inpainting:\n{traceback.format_exc()}")  
-            if not self.ignore_errors:  
+        except Exception as e:
+            logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
+            if not self.ignore_errors:
                 raise
             else:
                 ctx.img_inpainted = ctx.img_rgb
@@ -991,6 +1014,10 @@ class MangaTranslator:
             except Exception as e:
                 logger.error(f"Error saving inpainted.png debug image: {e}")
                 logger.debug(f"Exception details: {traceback.format_exc()}")
+
+        # 保存inpainted图片到新目录结构
+        if hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
+            self._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
         # -- Rendering
         await self._report_progress('rendering')
 
@@ -1079,9 +1106,48 @@ class MangaTranslator:
                                         config.detector.box_threshold,
                                         config.detector.unclip_ratio, config.detector.det_invert, config.detector.det_gamma_correct, config.detector.det_rotate,
                                         config.detector.det_auto_rotate,
-                                        self.device, self.verbose)        
-        return result
+                                        self.device, self.verbose)
+        
+        # --- BEGIN NON-MAXIMUM SUPPRESSION (NMS) FOR DE-DUPLICATION ---
+        if result and result[0]:
+            try:
+                from shapely.geometry import Polygon
 
+                def calculate_iou(box_1, box_2):
+                    poly_1 = Polygon(box_1.pts)
+                    poly_2 = Polygon(box_2.pts)
+                    if not poly_1.is_valid or not poly_2.is_valid:
+                        return 0.0
+                    intersection_area = poly_1.intersection(poly_2).area
+                    union_area = poly_1.union(poly_2).area
+                    if union_area == 0:
+                        return 0.0
+                    return intersection_area / union_area
+
+                textlines = result[0][:] # Work on a copy
+                textlines.sort(key=lambda x: x.prob, reverse=True)
+                
+                kept_textlines = []
+                while textlines:
+                    current_box = textlines.pop(0)
+                    kept_textlines.append(current_box)
+                    remaining_textlines = []
+                    for box in textlines:
+                        iou = calculate_iou(current_box, box)
+                        if iou < 0.9: # IoU threshold, 0.9 means very high overlap
+                            remaining_textlines.append(box)
+                    textlines = remaining_textlines
+
+                if len(result[0]) != len(kept_textlines):
+                    logger.info(f"Removed {len(result[0]) - len(kept_textlines)} duplicate lines via NMS.")
+                    result = (kept_textlines, result[1], result[2])
+
+            except Exception as e:
+                logger.error(f"An error occurred during Non-Maximum Suppression: {e}")
+                pass
+        # --- END NON-MAXIMUM SUPPRESSION (NMS) ---
+
+        return result
     async def _unload_model(self, tool: str, model: str):
         logger.info(f"Unloading {tool} model: {model}")
         match tool:
@@ -1533,6 +1599,34 @@ class MangaTranslator:
             for region in ctx.text_regions:  
                 region.translation = ""  # 空翻译将创建空白区域 / Empty translation will create blank areas
         else: # Actual network translation
+            # --- BEGIN PRE-TRANSLATION DE-DUPLICATION ---
+            # Per user request, clean up duplicate lines within regions before sending to translator.
+            logger.debug("Starting pre-translation de-duplication of regions...")
+            for region in ctx.text_regions:
+                if hasattr(region, 'lines') and hasattr(region, 'texts') and isinstance(region.lines, np.ndarray) and isinstance(region.texts, list) and len(region.lines) > 1:
+                    unique_lines = []
+                    unique_texts = []
+                    seen_coords = set()
+                    
+                    original_line_count = len(region.lines)
+
+                    for i, line_coords in enumerate(region.lines):
+                        # Flatten for hashing, ensuring consistent representation
+                        coords_tuple = tuple(line_coords.reshape(-1))
+                        if coords_tuple not in seen_coords:
+                            seen_coords.add(coords_tuple)
+                            unique_lines.append(line_coords)
+                            if i < len(region.texts):
+                                unique_texts.append(region.texts[i])
+
+                    if len(unique_lines) < original_line_count:
+                        logger.info(f"Pre-translation cleanup: Found and removed {original_line_count - len(unique_lines)} internal duplicate lines in a region.")
+                        region.lines = np.array(unique_lines, dtype=np.float64)
+                        region.texts = unique_texts
+                        region.text = '\n'.join(unique_texts)
+            logger.debug("Pre-translation de-duplication finished.")
+            # --- END PRE-TRANSLATION DE-DUPLICATION ---
+
             texts = [region.text.replace('\ufffd', '') for region in ctx.text_regions]
             translated_sentences = await self._dispatch_with_context(config, texts, ctx)
 
@@ -1562,17 +1656,18 @@ class MangaTranslator:
             logger.info("'Generate and Export' mode: Halting pipeline after translation and exporting clean text.")
             if hasattr(ctx, 'image_name') and ctx.image_name and ctx.text_regions:
                 try:
-                    json_path = os.path.splitext(ctx.image_name)[0] + '_translations.json'
-                    if os.path.exists(json_path):
-                        from services.workflow_service import generate_text_from_template, get_template_path_from_config
+                    json_path = find_json_path(ctx.image_name)
+                    if json_path and os.path.exists(json_path):
+                        from services.workflow_service import generate_translated_text, get_template_path_from_config
                         template_path = get_template_path_from_config()
                         if template_path and os.path.exists(template_path):
-                            result = generate_text_from_template(json_path, template_path)
-                            logger.info(f"Clean text export result: {result}")
+                            # 导出翻译
+                            translated_result = generate_translated_text(json_path, template_path)
+                            logger.info(f"Translated text export result: {translated_result}")
                         else:
                             logger.warning(f"Template file not found, cannot export clean text: {template_path}")
                     else:
-                        logger.warning(f"JSON file not found, cannot export clean text: {json_path}")
+                        logger.warning(f"JSON file not found, cannot export clean text: {ctx.image_name}")
                 except Exception as e:
                     logger.error(f"Failed to export clean text in 'Generate and Export' mode: {e}")
             
@@ -1949,14 +2044,56 @@ class MangaTranslator:
                 logger.info("Template+SaveText mode detected. Forcing sequential processing to save files one by one.")
             else:
                 logger.debug('Batch size <= 1, switching to individual processing mode')
-            
+
             results = []
             for i, (image, config) in enumerate(images_with_configs):
                 # 确保传递 image_name 以便正确保存文件
                 # The image object should have a .name attribute attached by the caller (e.g., the UI)
                 image_name_to_pass = image.name if hasattr(image, 'name') else None
-                
+
                 ctx = await self.translate(image, config, image_name=image_name_to_pass)
+
+                # 如果提供了save_info，保存图片
+                if save_info and ctx.result:
+                    try:
+                        output_folder = save_info.get('output_folder')
+                        input_folders = save_info.get('input_folders', set())
+                        output_format = save_info.get('format')
+                        overwrite = save_info.get('overwrite', True)
+
+                        file_path = ctx.image_name
+                        final_output_dir = output_folder
+                        parent_dir = os.path.normpath(os.path.dirname(file_path))
+                        for folder in input_folders:
+                            if parent_dir.startswith(folder):
+                                relative_path = os.path.relpath(parent_dir, folder)
+                                final_output_dir = os.path.join(output_folder, os.path.basename(folder), relative_path)
+                                break
+
+                        os.makedirs(final_output_dir, exist_ok=True)
+
+                        base_filename, _ = os.path.splitext(os.path.basename(file_path))
+                        if output_format and output_format.strip() and output_format.lower() != 'none':
+                            output_filename = f"{base_filename}.{output_format}"
+                        else:
+                            output_filename = os.path.basename(file_path)
+
+                        final_output_path = os.path.join(final_output_dir, output_filename)
+
+                        if not overwrite and os.path.exists(final_output_path):
+                            logger.info(f"  -> ⚠️ [SEQUENTIAL] Skipping existing file: {os.path.basename(final_output_path)}")
+                        else:
+                            image_to_save = ctx.result
+                            if final_output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
+                                image_to_save = image_to_save.convert('RGB')
+
+                            image_to_save.save(final_output_path, quality=self.save_quality)
+                            logger.info(f"  -> ✅ [SEQUENTIAL] Saved successfully: {os.path.basename(final_output_path)}")
+                            self._update_translation_map(file_path, final_output_path)
+
+                    except Exception as save_err:
+                        logger.error(f"Error saving sequential result for {os.path.basename(ctx.image_name)}: {save_err}")
+
                 results.append(ctx)
             return results
         
@@ -1965,14 +2102,19 @@ class MangaTranslator:
         total_images = len(images_with_configs)
 
         for batch_start in range(0, total_images, batch_size):
+            # 检查是否被取消
+            await asyncio.sleep(0)
+
             batch_end = min(batch_start + batch_size, total_images)
             current_batch_images = images_with_configs[batch_start:batch_end]
-            
+
             logger.info(f"Processing rolling batch {batch_start//batch_size + 1}/{(total_images + batch_size - 1)//batch_size} (images {batch_start+1}-{batch_end})")
 
             # 阶段一：预处理当前批次
             preprocessed_contexts = []
             for i, (image, config) in enumerate(current_batch_images):
+                # 检查是否被取消
+                await asyncio.sleep(0)
                 try:
                     self._set_image_context(config, image)
                     ctx = await self._translate_until_translation(image, config)
@@ -2002,17 +2144,18 @@ class MangaTranslator:
                     if ctx.text_regions and hasattr(ctx, 'image_name') and ctx.image_name:
                         self._save_text_to_file(ctx.image_name, ctx)
                         try:
-                            json_path = os.path.splitext(ctx.image_name)[0] + '_translations.json'
-                            if os.path.exists(json_path):
-                                from services.workflow_service import generate_text_from_template, get_template_path_from_config
+                            json_path = find_json_path(ctx.image_name)
+                            if json_path and os.path.exists(json_path):
+                                from services.workflow_service import generate_translated_text, get_template_path_from_config
                                 template_path = get_template_path_from_config()
                                 if template_path and os.path.exists(template_path):
-                                    export_result = generate_text_from_template(json_path, template_path)
-                                    logger.info(f"Clean text export result for {os.path.basename(ctx.image_name)}: {export_result}")
+                                    # 导出翻译
+                                    translated_result = generate_translated_text(json_path, template_path)
+                                    logger.info(f"Translated text export for {os.path.basename(ctx.image_name)}: {translated_result}")
                                 else:
                                     logger.warning(f"Template file not found for {os.path.basename(ctx.image_name)}: {template_path}")
                             else:
-                                logger.warning(f"JSON file not found for {os.path.basename(ctx.image_name)}: {json_path}")
+                                logger.warning(f"JSON file not found for {os.path.basename(ctx.image_name)}")
                         except Exception as e:
                             logger.error(f"Failed to export clean text for {os.path.basename(ctx.image_name)}: {e}")
                     results.append(ctx)
@@ -2020,6 +2163,8 @@ class MangaTranslator:
 
             # 阶段三：渲染并保存当前批次
             for ctx, config in translated_contexts:
+                # 检查是否被取消
+                await asyncio.sleep(0)
                 try:
                     if hasattr(ctx, 'input'):
                         from .utils.generic import get_image_md5
@@ -2029,6 +2174,7 @@ class MangaTranslator:
                     
                     ctx = await self._complete_translation_pipeline(ctx, config)
 
+                    logger.info(f"[DEBUG] save_info={save_info is not None}, ctx.result={ctx.result is not None}")
                     if save_info and ctx.result:
                         try:
                             output_folder = save_info.get('output_folder')
@@ -2960,9 +3106,9 @@ class MangaTranslator:
         try:
             ctx.img_inpainted = await self._run_inpainting(config, ctx)
 
-        except Exception as e:  
-            logger.error(f"Error during inpainting:\n{traceback.format_exc()}")  
-            if not self.ignore_errors:  
+        except Exception as e:
+            logger.error(f"Error during inpainting:\n{traceback.format_exc()}")
+            if not self.ignore_errors:
                 raise
             else:
                 ctx.img_inpainted = ctx.img_rgb
@@ -2975,6 +3121,10 @@ class MangaTranslator:
             except Exception as e:
                 logger.error(f"Error saving inpainted.png debug image: {e}")
                 logger.debug(f"Exception details: {traceback.format_exc()}")
+
+        # 保存inpainted图片到新目录结构
+        if hasattr(ctx, 'image_name') and ctx.image_name and ctx.img_inpainted is not None:
+            self._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
 
         # -- Rendering
         await self._report_progress('rendering')
@@ -3262,14 +3412,19 @@ class MangaTranslator:
         
         total_images = len(images_with_configs)
         for batch_start in range(0, total_images, batch_size):
+            # 检查是否被取消
+            await asyncio.sleep(0)
+
             batch_end = min(batch_start + batch_size, total_images)
             current_batch_images = images_with_configs[batch_start:batch_end]
-            
+
             logger.info(f"Processing rolling batch {batch_start//batch_size + 1}/{(total_images + batch_size - 1)//batch_size} (images {batch_start+1}-{batch_end})")
 
             # 阶段一：预处理当前批次
             preprocessed_contexts = []
             for i, (image, config) in enumerate(current_batch_images):
+                # 检查是否被取消
+                await asyncio.sleep(0)
                 try:
                     self._set_image_context(config, image)
                     ctx = await self._translate_until_translation(image, config)
@@ -3339,20 +3494,21 @@ class MangaTranslator:
                     # Ensure JSON is saved first
                     if ctx.text_regions and hasattr(ctx, 'image_name') and ctx.image_name:
                         self._save_text_to_file(ctx.image_name, ctx)
-                        
+
                         # Export the clean text using the template
                         try:
-                            json_path = os.path.splitext(ctx.image_name)[0] + '_translations.json'
-                            if os.path.exists(json_path):
-                                from services.workflow_service import generate_text_from_template, get_template_path_from_config
+                            json_path = find_json_path(ctx.image_name)
+                            if json_path and os.path.exists(json_path):
+                                from services.workflow_service import generate_translated_text, get_template_path_from_config
                                 template_path = get_template_path_from_config()
                                 if template_path and os.path.exists(template_path):
-                                    export_result = generate_text_from_template(json_path, template_path)
-                                    logger.info(f"Clean text export result for {os.path.basename(ctx.image_name)}: {export_result}")
+                                    # 导出翻译
+                                    translated_result = generate_translated_text(json_path, template_path)
+                                    logger.info(f"Translated text export for {os.path.basename(ctx.image_name)}: {translated_result}")
                                 else:
                                     logger.warning(f"Template file not found, cannot export clean text for {os.path.basename(ctx.image_name)}: {template_path}")
                             else:
-                                logger.warning(f"JSON file not found, cannot export clean text for {os.path.basename(ctx.image_name)}: {json_path}")
+                                logger.warning(f"JSON file not found, cannot export clean text for {os.path.basename(ctx.image_name)}")
                         except Exception as e:
                             logger.error(f"Failed to export clean text for {os.path.basename(ctx.image_name)} in HQ mode: {e}")
 
@@ -3362,6 +3518,8 @@ class MangaTranslator:
 
             # 阶段三：渲染并保存当前批次
             for ctx, config in preprocessed_contexts:
+                # 检查是否被取消
+                await asyncio.sleep(0)
                 try:
                     if hasattr(ctx, 'input'):
                         from .utils.generic import get_image_md5

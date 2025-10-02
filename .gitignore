@@ -69,3 +69,11 @@ dict/wyxxl.json
 gemini_key_validator.py
 gemini_key_validator_ui.py30cadb668d2efc5c432fd2939130df0d_translations.json 
 新建文件夹/
+manga-translator-ui-1.5.1/
+BallonsTranslator-dev/*
+# Added by Gemini to ignore untracked files
+.cunzhi-memory/
+logs/
+*_translations.json
+*.png
+temp_requirements.txt

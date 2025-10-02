@@ -73,7 +73,7 @@ class OpenAIHighQualityTranslator(CommonTranslator):
         self.api_key = os.getenv('OPENAI_API_KEY', OPENAI_API_KEY)
         self.base_url = os.getenv('OPENAI_API_BASE', 'https://api.openai.com/v1')
         self.model = os.getenv('OPENAI_MODEL', "gpt-4o")
-        self.max_tokens = 4000
+        self.max_tokens = 25000
         self.temperature = 0.1
         self._setup_client()
         

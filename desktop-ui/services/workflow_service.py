@@ -4,6 +4,16 @@ import re
 import glob
 from typing import List, Tuple
 import logging
+import sys
+
+# 添加项目根目录到路径以便导入path_manager
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from manga_translator.utils.path_manager import (
+    get_original_txt_path,
+    get_translated_txt_path,
+    find_json_path,
+    find_txt_files
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,63 +211,168 @@ def parse_template(template_string: str):
     logger.debug(f"Parsed template parts: prefix='{prefix.strip()}', separator='{separator.strip()}', suffix='{suffix.strip()}'")
     return prefix, item_template, separator, suffix
 
-def generate_text_from_template(
-    detailed_json_path: str, 
-    template_path: str
+def generate_original_text(
+    detailed_json_path: str,
+    template_path: str = None,
+    output_path: str = None
 ) -> str:
     """
-    Generates a custom text format based on a free-form text template file.
+    导出原文到TXT文件
+
+    Args:
+        detailed_json_path: JSON文件路径
+        template_path: 模板文件路径（可选，用于格式化）
+        output_path: 输出文件路径（可选，默认使用path_manager生成）
+
+    Returns:
+        输出文件路径或错误信息
     """
     try:
         with open(detailed_json_path, 'r', encoding='utf-8') as f:
             source_data = json.load(f)
-        with open(template_path, 'r', encoding='utf-8') as f:
-            template_string = f.read()
     except Exception as e:
-        return f"Error reading source files: {e}"
-
-    try:
-        prefix, item_template, separator, suffix = parse_template(template_string)
-    except ValueError as e:
-        return f"Error parsing template: {e}"
+        return f"Error reading JSON file: {e}"
 
     image_data = next(iter(source_data.values()), None)
     if not image_data or 'regions' not in image_data:
         return "Error: Could not find 'regions' list in source JSON."
     regions = image_data.get('regions', [])
-    
-    output_parts = []
+
+    # 收集原文
+    original_texts = []
     for region in regions:
-        original_text = region.get('text', '')
-        translated_text = region.get('translation', '')
-        
-        # Filter out [BR] tags for clean export
-        original_text = original_text.replace('[BR]', '')
-        translated_text = translated_text.replace('[BR]', '')
-        
-        original_text_json = json.dumps(original_text, ensure_ascii=False)
-        translated_text_json = json.dumps(translated_text, ensure_ascii=False)
+        original_text = region.get('text', '').replace('[BR]', '')
+        if original_text.strip():
+            original_texts.append(original_text)
 
-        part = item_template.replace("<original>", original_text_json)
-        part = part.replace("<translated>", translated_text_json)
-        output_parts.append(part)
+    # 生成输出路径
+    if output_path is None:
+        # 从JSON路径推断图片路径
+        json_dir = os.path.dirname(detailed_json_path)
+        json_basename = os.path.basename(detailed_json_path)
 
-    # Join all parts. If there is content, join by separator. Otherwise, it's an empty string.
-    if output_parts:
-        final_body = separator.join(output_parts)
-    else:
-        final_body = ""
+        # 检查是否在新目录结构中
+        if json_dir.endswith(os.path.join('manga_translator_work', 'json')):
+            # 推断原图片路径
+            work_dir = os.path.dirname(json_dir)
+            image_dir = os.path.dirname(work_dir)
+            image_name = json_basename.replace('_translations.json', '')
+            # 尝试常见图片扩展名
+            for ext in ['.jpg', '.png', '.jpeg', '.webp']:
+                image_path = os.path.join(image_dir, image_name + ext)
+                if os.path.exists(image_path):
+                    output_path = get_original_txt_path(image_path)
+                    break
+            if output_path is None:
+                # 如果找不到图片，使用JSON同目录
+                output_path = os.path.splitext(detailed_json_path)[0] + '_original.txt'
+        else:
+            # 旧格式，使用JSON同目录
+            output_path = os.path.splitext(detailed_json_path)[0] + '_original.txt'
 
-    final_content = prefix + final_body + suffix
-    output_path = os.path.splitext(detailed_json_path)[0] + ".txt"
-
+    # 写入文件
     try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(final_content)
+            f.write('\n'.join(original_texts))
+        logger.info(f"Original text exported to: {output_path}")
     except Exception as e:
         return f"Error writing to output file: {e}"
-        
+
     return output_path
+
+
+def generate_translated_text(
+    detailed_json_path: str,
+    template_path: str = None,
+    output_path: str = None
+) -> str:
+    """
+    导出翻译到TXT文件
+
+    Args:
+        detailed_json_path: JSON文件路径
+        template_path: 模板文件路径（可选，用于格式化）
+        output_path: 输出文件路径（可选，默认使用path_manager生成）
+
+    Returns:
+        输出文件路径或错误信息
+    """
+    try:
+        with open(detailed_json_path, 'r', encoding='utf-8') as f:
+            source_data = json.load(f)
+    except Exception as e:
+        return f"Error reading JSON file: {e}"
+
+    image_data = next(iter(source_data.values()), None)
+    if not image_data or 'regions' not in image_data:
+        return "Error: Could not find 'regions' list in source JSON."
+    regions = image_data.get('regions', [])
+
+    # 收集翻译
+    translated_texts = []
+    for region in regions:
+        translated_text = region.get('translation', '').replace('[BR]', '')
+        if translated_text.strip():
+            translated_texts.append(translated_text)
+
+    # 生成输出路径
+    if output_path is None:
+        # 从JSON路径推断图片路径
+        json_dir = os.path.dirname(detailed_json_path)
+        json_basename = os.path.basename(detailed_json_path)
+
+        # 检查是否在新目录结构中
+        if json_dir.endswith(os.path.join('manga_translator_work', 'json')):
+            # 推断原图片路径
+            work_dir = os.path.dirname(json_dir)
+            image_dir = os.path.dirname(work_dir)
+            image_name = json_basename.replace('_translations.json', '')
+            # 尝试常见图片扩展名
+            for ext in ['.jpg', '.png', '.jpeg', '.webp']:
+                image_path = os.path.join(image_dir, image_name + ext)
+                if os.path.exists(image_path):
+                    output_path = get_translated_txt_path(image_path)
+                    break
+            if output_path is None:
+                # 如果找不到图片，使用JSON同目录
+                output_path = os.path.splitext(detailed_json_path)[0] + '_translated.txt'
+        else:
+            # 旧格式，使用JSON同目录
+            output_path = os.path.splitext(detailed_json_path)[0] + '_translated.txt'
+
+    # 写入文件
+    try:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(translated_texts))
+        logger.info(f"Translated text exported to: {output_path}")
+    except Exception as e:
+        return f"Error writing to output file: {e}"
+
+    return output_path
+
+
+def generate_text_from_template(
+    detailed_json_path: str,
+    template_path: str
+) -> str:
+    """
+    Generates a custom text format based on a free-form text template file.
+    保留用于向后兼容，现在会同时生成原文和翻译两个文件
+    """
+    # 生成原文
+    original_result = generate_original_text(detailed_json_path, template_path)
+    if original_result.startswith("Error"):
+        logger.warning(f"Failed to generate original text: {original_result}")
+
+    # 生成翻译
+    translated_result = generate_translated_text(detailed_json_path, template_path)
+    if translated_result.startswith("Error"):
+        return translated_result
+
+    # 返回翻译文件路径（保持向后兼容）
+    return translated_result
 
 def get_template_path_from_config(custom_path: str = None) -> str:
     """
@@ -475,65 +590,64 @@ def smart_update_translations_from_images(
 ) -> str:
     """
     根据加载的图片文件路径，智能匹配对应的JSON和TXT文件进行翻译更新
-    
+    支持新的目录结构和向后兼容
+
     Args:
         image_file_paths: 图片文件路径列表
         template_path: 模板文件路径，如果为None则使用默认模板
-        
+
     Returns:
         str: 处理结果报告
     """
     if not image_file_paths:
         return "错误：未提供图片文件路径"
-    
+
     # 使用默认模板如果未指定，并确保模板文件存在
     if template_path is None:
         template_path = ensure_default_template_exists()
         if template_path is None:
             return "错误：无法创建或找到默认模板文件"
-    
+
     if not os.path.exists(template_path):
         return f"错误：模板文件不存在: {template_path}"
-    
+
     results = []
-    
+
     for image_path in image_file_paths:
         if not os.path.exists(image_path):
             results.append(f"✗ {os.path.basename(image_path)}: 图片文件不存在")
             continue
-        
-        # 推理对应的JSON和TXT文件路径
-        # 图片: "image.jpg" -> JSON: "image_translations.json", TXT: "image_translations.txt"
-        base_name = os.path.splitext(image_path)[0]  # 去除扩展名得到"image"
-        json_path = base_name + "_translations.json"
-        txt_path = base_name + "_translations.txt"  # TXT和JSON同名，只是扩展名不同
-        
+
+        # 使用path_manager查找JSON和TXT文件（支持新目录结构）
+        json_path = find_json_path(image_path)
+        original_txt_path, translated_txt_path = find_txt_files(image_path)
+
         # 检查文件存在性
-        json_exists = os.path.exists(json_path)
-        txt_exists = os.path.exists(txt_path)
-        
-        if not json_exists:
-            results.append(f"- {os.path.basename(image_path)}: 未找到JSON文件 ({os.path.basename(json_path)})")
+        if not json_path:
+            results.append(f"- {os.path.basename(image_path)}: 未找到JSON文件")
             continue
-            
-        if not txt_exists:
-            results.append(f"- {os.path.basename(image_path)}: 未找到TXT文件 ({os.path.basename(txt_path)})")
+
+        # 优先使用翻译TXT，如果不存在则使用原文TXT（向后兼容）
+        txt_path = translated_txt_path if translated_txt_path else original_txt_path
+
+        if not txt_path:
+            results.append(f"- {os.path.basename(image_path)}: 未找到TXT文件")
             continue
-        
+
         # 执行翻译更新
         try:
             result = safe_update_large_json_from_text(txt_path, json_path, template_path)
             results.append(f"✓ {os.path.basename(image_path)}: {result}")
         except Exception as e:
             results.append(f"✗ {os.path.basename(image_path)}: 更新失败 - {e}")
-    
+
     if not results:
         return "未找到任何可处理的文件"
-    
+
     # 统计结果
     successful = len([r for r in results if r.startswith("✓")])
     total = len(results)
-    
+
     summary = f"批量翻译更新完成 (成功: {successful}/{total}):\n" + "\n".join(results)
     return summary
 

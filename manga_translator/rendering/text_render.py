@@ -146,23 +146,26 @@ def compact_special_symbols(text: str) -> str:
     return text
 
 def auto_add_horizontal_tags(text: str) -> str:
-    """
-    Automatically wraps continuous horizontal character segments (like English words and numbers)
-    with <H> tags for mixed-direction rendering.
-    """
-    if not text:
-        return ""
+    """自动为竖排文本中的短英文单词或连续符号添加<H>标签，使其横向显示。"""
+    # 如果文本中已有<H>标签，则不进行处理，以尊重手动设置
+    if '<H>' in text:
+        return text
 
-    # This regex finds sequences of 2 or more ASCII letters, numbers, or specific symbols,
+    # This regex finds sequences of 2-4 ASCII/full-width letters, numbers, or specific symbols,
     # OR sequences of 2 or more exclamation/question marks (full or half-width).
-    horizontal_char_pattern = r'[a-zA-Z0-9_.-]{2,4}|[!?！？]{2,4}'
+    # Full-width ranges: \uff21-\uff3a (A-Z), \uff41-\uff5a (a-z), \uff10-\uff19 (0-9)
+    horizontal_char_pattern = r'(?<![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])([a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-]{2,4})(?![a-zA-Z0-9\uff21-\uff3a\uff41-\uff5a\uff10-\uff19_.-])|[!?！？]{2,4}'
+    
+    pattern = re.compile(horizontal_char_pattern)
 
-    def tag_match(match):
-        # Wraps the found segment with <H> tags.
-        segment = match.group(0)
-        return f'<H>{segment}</H>'
+    def replacer(match):
+        # 如果group(1)存在，说明匹配的是单词模式，否则是标点模式
+        if match.group(1):
+            return f"<H>{match.group(1)}</H>"
+        else:
+            return f"<H>{match.group(0)}</H>"
 
-    return re.sub(horizontal_char_pattern, tag_match, text)
+    return pattern.sub(replacer, text)
     
 def rotate_image(image, angle):
     if angle == 0:
@@ -289,22 +292,34 @@ def get_char_glyph(cdpt: str, font_size: int, direction: int) -> Glyph:
     global FONT_SELECTION
     for i, face in enumerate(FONT_SELECTION):
         char_index = face.get_char_index(cdpt)
-        if char_index == 0 and i != len(FONT_SELECTION) - 1:
-            # Log fallback only on the primary font for clarity
-            if i == 0:
-                try:
-                    font_name = face.family_name.decode('utf-8') if face.family_name else 'Unknown'
-                    logger.info(f"Character '{cdpt}' not found in primary font '{font_name}'. Trying fallbacks.")
-                except Exception:
-                    pass # Avoid logging errors within logging
-            continue
+        if char_index != 0:
+            # Character found, load and return glyph
+            if direction == 0:
+                face.set_pixel_sizes(0, font_size)
+            elif direction == 1:
+                face.set_pixel_sizes(font_size, 0)
+            face.load_char(cdpt)
+            return Glyph(face.glyph)
         
-        if direction == 0:
-            face.set_pixel_sizes(0, font_size)
-        elif direction == 1:
-            face.set_pixel_sizes(font_size, 0)
-        face.load_char(cdpt)
-        return Glyph(face.glyph)
+        # Log fallback attempt only on the primary font for clarity
+        if i == 0:
+            try:
+                font_name = face.family_name.decode('utf-8') if face.family_name else 'Unknown'
+                logger.info(f"Character '{cdpt}' not found in primary font '{font_name}'. Trying fallbacks.")
+            except Exception:
+                pass # Avoid logging errors within logging
+
+    # If the loop completes, the character was not found in any font.
+    logger.error(f"FATAL: Character '{cdpt}' not found in any of the available fonts. Substituting with a placeholder.")
+    
+    # To prevent a crash, recursively call with a placeholder that is guaranteed to exist.
+    # Avoid infinite recursion if space itself is not found (highly unlikely).
+    if cdpt == ' ':
+        # This should never happen with valid fonts, but as a safeguard:
+        # We can't return a glyph, so we must raise an exception.
+        raise RuntimeError("Catastrophic failure: Space character ' ' not found in any font.")
+        
+    return get_char_glyph(' ', font_size, direction)
 
 #@functools.lru_cache(maxsize = 1024, typed = True)
 def get_char_border(cdpt: str, font_size: int, direction: int):
@@ -325,6 +340,9 @@ def calc_vertical(font_size: int, text: str, max_height: int, config=None):
     Line breaking logic for vertical text.
     Handles forced newlines (\\n) and is aware of <H> horizontal blocks.
     """
+    # 统一处理所有类型的AI换行符，确保后续逻辑的正确性
+    text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
+
     line_text_list = []
     line_height_list = []
 
@@ -376,7 +394,9 @@ def calc_vertical(font_size: int, text: str, max_height: int, config=None):
                     else:
                         char_offset_y = ckpt.metrics.vertAdvance >> 6 if hasattr(ckpt.metrics, 'vertAdvance') and ckpt.metrics.vertAdvance != 0 else font_size
 
-                    if current_line_height + char_offset_y > max_height and current_line_text:
+                    should_wrap = current_line_height + char_offset_y > max_height
+
+                    if should_wrap and current_line_text:
                         line_text_list.append(current_line_text)
                         line_height_list.append(current_line_height)
                         current_line_text = cdpt
@@ -487,13 +507,8 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
     if not text:
         return
 
-    # --- FIX FOR BLURRY FONT ---
-    scale = 4
-    font_size_scaled = font_size * scale
     bg_size = int(max(font_size * 0.07, 1)) if bg is not None else 0
-    bg_size_scaled = bg_size * scale
-    spacing_x_scaled = int(font_size_scaled * (line_spacing or 0.2))
-    # --- END FIX ---
+    spacing_x = int(font_size * (line_spacing or 0.2))
 
     # Conditional wrapping logic based on the new region_count parameter
     effective_max_height = h
@@ -501,25 +516,25 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
         if config.render.disable_auto_wrap or region_count <= 1:
             effective_max_height = 99999
 
-    # Use scaled font size for line breaking calculation
-    line_text_list, line_height_list_scaled = calc_vertical(font_size_scaled, text, effective_max_height * scale, config=config)
-    if not line_height_list_scaled:
+    # Use original font size for line breaking calculation
+    line_text_list, line_height_list = calc_vertical(font_size, text, effective_max_height, config=config)
+    if not line_height_list:
         return
         
-    canvas_x_scaled = font_size_scaled * len(line_text_list) + spacing_x_scaled * (len(line_text_list) - 1) + (font_size_scaled + bg_size_scaled) * 2
-    canvas_y_scaled = max(line_height_list_scaled) + (font_size_scaled + bg_size_scaled) * 2
+    canvas_x = font_size * len(line_text_list) + spacing_x * (len(line_text_list) - 1) + (font_size + bg_size) * 2
+    canvas_y = max(line_height_list) + (font_size + bg_size) * 2
 
-    canvas_text = np.zeros((canvas_y_scaled, canvas_x_scaled), dtype=np.uint8)
+    canvas_text = np.zeros((canvas_y, canvas_x), dtype=np.uint8)
     canvas_border = canvas_text.copy()
-    pen_orig = [canvas_text.shape[1] - (font_size_scaled + bg_size_scaled), (font_size_scaled + bg_size_scaled)]
+    pen_orig = [canvas_text.shape[1] - (font_size + bg_size), (font_size + bg_size)]
 
-    for line_idx, (line_text, line_height) in enumerate(zip(line_text_list, line_height_list_scaled)):
+    for line_idx, (line_text, line_height) in enumerate(zip(line_text_list, line_height_list)):
         pen_line = pen_orig.copy()
 
         if alignment == 'center':
-            pen_line[1] += (max(line_height_list_scaled) - line_height) // 2
+            pen_line[1] += (max(line_height_list) - line_height) // 2
         elif alignment == 'right': # In vertical, right means bottom
-            pen_line[1] += max(line_height_list_scaled) - line_height
+            pen_line[1] += max(line_height_list) - line_height
 
         parts = re.split(r'(<H>.*?</H>)', line_text, flags=re.IGNORECASE | re.DOTALL)
 
@@ -534,19 +549,24 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                 if not content:
                     continue
                 
-                # --- RENDER HORIZONTAL BLOCK AT SCALE ---
-                h_font_size_scaled = font_size_scaled
-                h_width = get_string_width(h_font_size_scaled, content) + h_font_size_scaled
-                h_height = h_font_size_scaled * 2
+                # --- RENDER HORIZONTAL BLOCK ---
+                h_font_size = font_size
+                # Apply specific scaling for 4-character horizontal text
+                if len(content) == 4:
+                    # Scale to ~75% to fit like 3 characters
+                    h_font_size = int(h_font_size * 0.75)
+
+                h_width = get_string_width(h_font_size, content) + h_font_size
+                h_height = h_font_size * 2
 
                 temp_canvas_text = np.zeros((h_height, h_width), dtype=np.uint8)
                 temp_canvas_border = np.zeros((h_height, h_width), dtype=np.uint8)
-                pen_h = [h_font_size_scaled // 2, h_font_size_scaled]
+                pen_h = [h_font_size // 2, h_font_size]
 
                 for char_h in content:
                     if char_h == '！': char_h = '!'
                     elif char_h == '？': char_h = '?'
-                    offset_x = put_char_horizontal(h_font_size_scaled, char_h, pen_h, temp_canvas_text, temp_canvas_border, border_size=bg_size_scaled)
+                    offset_x = put_char_horizontal(h_font_size, char_h, pen_h, temp_canvas_text, temp_canvas_border, border_size=bg_size)
                     pen_h[0] += offset_x
 
                 combined_temp = cv2.add(temp_canvas_text, temp_canvas_border)
@@ -559,7 +579,10 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
 
                 rh, rw = horizontal_block_text.shape
 
-                paste_x = pen_line[0] - (rw // 2)
+                # 修复：在竖排行的中心正确地对齐横排块
+                # pen_line[0] 是右边界，font_size 是行宽
+                line_start_x = pen_line[0] - font_size
+                paste_x = line_start_x + (font_size - rw) // 2
                 paste_y = pen_line[1]
 
                 if paste_y + rh > canvas_text.shape[0] or paste_x + rw > canvas_text.shape[1] or paste_x < 0 or paste_y < 0:
@@ -571,15 +594,15 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
                 target_border_roi = canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw]
                 canvas_border[paste_y:paste_y+rh, paste_x:paste_x+rw] = np.maximum(target_border_roi, horizontal_block_border)
 
-                pen_line[1] += font_size_scaled
+                pen_line[1] += font_size
                 # --- END HORIZONTAL BLOCK RENDER ---
 
             else: # It's a vertical part
                 for char_idx, c in enumerate(part):
-                    offset_y = put_char_vertical(font_size_scaled, c, pen_line, canvas_text, canvas_border, border_size=bg_size_scaled, config=config, line_width=font_size_scaled)
+                    offset_y = put_char_vertical(font_size, c, pen_line, canvas_text, canvas_border, border_size=bg_size, config=config, line_width=font_size)
                     pen_line[1] += offset_y
         
-        pen_orig[0] -= spacing_x_scaled + font_size_scaled
+        pen_orig[0] -= spacing_x + font_size
 
     canvas_border = np.clip(canvas_border, 0, 255)
     line_box = add_color(canvas_text, fg, canvas_border, bg)
@@ -589,16 +612,7 @@ def put_text_vertical(font_size: int, text: str, h: int, alignment: str, fg: Tup
     if w == 0 or h == 0:
         return
 
-    result_scaled = line_box[y:y+h, x:x+w]
-
-    # --- FIX FOR BLURRY FONT ---
-    # High-quality downscaling
-    new_w, new_h = w // scale, h // scale
-    if new_w == 0 or new_h == 0:
-        return
-        
-    result = cv2.resize(result_scaled, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-    # --- END FIX ---
+    result = line_box[y:y+h, x:x+w]
     
     return result
 
@@ -638,6 +652,8 @@ def calc_horizontal_cjk(font_size: int, text: str, max_width: int) -> Tuple[List
     Line breaking logic for CJK languages with punctuation rules.
     Handles forced newlines (\n) and invisible placeholders (＿).
     """
+    # 统一处理所有类型的AI换行符
+    text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
 
     lines = []
     no_start_chars = "》，。．」』】）！；：？"
@@ -685,6 +701,9 @@ def calc_horizontal_cjk(font_size: int, text: str, max_width: int) -> Tuple[List
     return line_text_list, line_width_list
 
 def calc_horizontal(font_size: int, text: str, max_width: int, max_height: int, language: str = 'en_US', hyphenate: bool = True) -> Tuple[List[str], List[int]]:
+
+    # 统一处理所有类型的AI换行符
+    text = re.sub(r'\s*(\[BR\]|<br>|【BR】)\s*', '\n', text, flags=re.IGNORECASE)
 
     max_width = max(max_width, 2 * font_size)
 

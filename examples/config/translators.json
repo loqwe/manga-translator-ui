@@ -1,0 +1,86 @@
+
+{
+  "youdao": {
+    "name": "youdao",
+    "display_name": "有道翻译",
+    "required_env_vars": ["YOUDAO_APP_KEY", "YOUDAO_SECRET_KEY"],
+    "validation_rules": {
+      "YOUDAO_APP_KEY": "^[a-zA-Z0-9]{8,}$",
+      "YOUDAO_SECRET_KEY": "^[a-zA-Z0-9]{8,}$"
+    }
+  },
+  "baidu": {
+    "name": "baidu",
+    "display_name": "百度翻译",
+    "required_env_vars": ["BAIDU_APP_ID", "BAIDU_SECRET_KEY"],
+    "validation_rules": {
+      "BAIDU_APP_ID": "^[0-9]{20}$",
+      "BAIDU_SECRET_KEY": "^[a-zA-Z0-9]{32}$"
+    }
+  },
+  "openai": {
+    "name": "openai",
+    "display_name": "OpenAI",
+    "required_env_vars": ["OPENAI_API_KEY"],
+    "optional_env_vars": ["OPENAI_MODEL", "OPENAI_API_BASE", "OPENAI_HTTP_PROXY"],
+    "validation_rules": {
+      "OPENAI_API_KEY": "^sk-[a-zA-Z0-9]{48}$"
+    }
+  },
+  "deepl": {
+    "name": "deepl",
+    "display_name": "DeepL",
+    "required_env_vars": ["DEEPL_AUTH_KEY"],
+    "validation_rules": {
+      "DEEPL_AUTH_KEY": "^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}:fx$"
+    }
+  },
+  "gemini": {
+    "name": "gemini",
+    "display_name": "Google Gemini",
+    "required_env_vars": ["GEMINI_API_KEY"],
+    "optional_env_vars": ["GEMINI_MODEL", "GEMINI_API_BASE"]
+  },
+  "deepseek": {
+    "name": "deepseek",
+    "display_name": "DeepSeek",
+    "required_env_vars": ["DEEPSEEK_API_KEY"],
+    "optional_env_vars": ["DEEPSEEK_MODEL", "DEEPSEEK_API_BASE"]
+  },
+  "groq": {
+    "name": "groq",
+    "display_name": "Groq",
+    "required_env_vars": ["GROQ_API_KEY"],
+    "optional_env_vars": ["GROQ_MODEL"]
+  },
+  "sakura": {
+    "name": "sakura",
+    "display_name": "Sakura",
+    "required_env_vars": ["SAKURA_API_BASE"],
+    "optional_env_vars": ["SAKURA_DICT_PATH", "SAKURA_VERSION"]
+  },
+  "custom_openai": {
+    "name": "custom_openai",
+    "display_name": "自定义 OpenAI",
+    "required_env_vars": ["CUSTOM_OPENAI_API_KEY", "CUSTOM_OPENAI_API_BASE"],
+    "optional_env_vars": ["CUSTOM_OPENAI_MODEL", "CUSTOM_OPENAI_MODEL_CONF"]
+  },
+  "openai_hq": {
+    "name": "openai_hq",
+    "display_name": "高质量翻译 OpenAI",
+    "required_env_vars": ["OPENAI_API_KEY"],
+    "optional_env_vars": ["OPENAI_MODEL", "OPENAI_API_BASE", "OPENAI_HTTP_PROXY"]
+  },
+  "gemini_hq": {
+    "name": "gemini_hq",
+    "display_name": "高质量翻译 Gemini",
+    "required_env_vars": ["GEMINI_API_KEY"],
+    "optional_env_vars": ["GEMINI_MODEL", "GEMINI_API_BASE"]
+  },
+  "chatgpt_2stage": {
+    "name": "chatgpt_2stage",
+    "display_name": "ChatGPT (2-Stage)",
+    "required_env_vars": ["OPENAI_API_KEY"],
+    "optional_env_vars": ["OPENAI_MODEL", "OPENAI_API_BASE", "OPENAI_HTTP_PROXY"]
+  }
+}

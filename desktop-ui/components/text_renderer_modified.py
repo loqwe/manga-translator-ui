@@ -43,6 +43,9 @@ class TextRenderer:
         
         # 外部服务
         self.param_service = None
+
+        # 区域数量跟踪（用于智能缩放模式下的换行逻辑）
+        self.total_region_count = 1
         
         # 字体管理
         self.default_font_path = None
@@ -81,6 +84,10 @@ class TextRenderer:
     def set_param_service(self, param_service):
         """设置参数服务"""
         self.param_service = param_service
+
+    def set_total_region_count(self, count: int):
+        """设置总区域数量"""
+        self.total_region_count = max(count, 1)
     
     def set_wysiwyg_mode(self, enabled: bool):
         """设置所见即所得模式"""
@@ -346,6 +353,7 @@ class TextRenderer:
             else:
                 # 垂直文本渲染（与后端参数完全一致）
                 try:
+                    # 传递正确的区域数量以确保智能缩放模式下的换行逻辑正确工作
                     rendered_text = text_render.put_text_vertical(
                         font_size=params['font_size'],
                         text=text_to_draw,
@@ -353,7 +361,8 @@ class TextRenderer:
                         alignment=params['alignment'],
                         fg=params['fg_color'],
                         bg=params['bg_color'],
-                        line_spacing=params['line_spacing']
+                        line_spacing=params['line_spacing'],
+                        region_count=self.total_region_count
                     )
                 except Exception as e:
                     print(f"垂直渲染失败: {e}")

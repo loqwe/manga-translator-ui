@@ -182,26 +182,35 @@ def merge_bboxes_text_region(bboxes: List[Quadrilateral], width, height):
         yield txtlns, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b)
 
 async def dispatch(textlines: List[Quadrilateral], width: int, height: int, config, verbose: bool = False) -> List[TextBlock]:
-    # print(width, height)
-    # import re
-    # for l in textlines:
-    #     s = str(l.pts)
-    #     s = re.sub(r'([\d\]]) ', r'\1, ', s.replace('\n ', ', ')).replace(']]', ']],')
-    #     print(s)
-
     text_regions: List[TextBlock] = []
     for (txtlns, fg_color, bg_color) in merge_bboxes_text_region(textlines, width, height):
-        total_logprobs = 0
+        # --- 在创建TextBlock之前进行去重 ---
+        unique_txtlns = []
+        seen_coords = set()
         for txtln in txtlns:
-            total_logprobs += np.log(txtln.prob) * txtln.area
-        total_logprobs /= sum([txtln.area for txtln in textlines])
+            # 将坐标数组转换为可哈希的元组以进行比较
+            coords_tuple = tuple(txtln.pts.reshape(-1))
+            if coords_tuple not in seen_coords:
+                seen_coords.add(coords_tuple)
+                unique_txtlns.append(txtln)
+        # --- 去重结束 ---
 
-        font_size = int(min([txtln.font_size for txtln in txtlns]))
-        angle = np.rad2deg(np.mean([txtln.angle for txtln in txtlns])) - 90
+        # 如果去重后没有任何行，则跳过此区域
+        if not unique_txtlns:
+            continue
+
+        total_logprobs = 0
+        # 使用去重后的 unique_txtlns
+        for txtln in unique_txtlns:
+            total_logprobs += np.log(txtln.prob) * txtln.area
+        total_logprobs /= sum([txtln.area for txtln in unique_txtlns])
+
+        font_size = int(min([txtln.font_size for txtln in unique_txtlns]))
+        angle = np.rad2deg(np.mean([txtln.angle for txtln in unique_txtlns])) - 90
         if abs(angle) < 3:
             angle = 0
-        lines = [txtln.pts for txtln in txtlns]
-        texts = [txtln.text for txtln in txtlns]
+        lines = [txtln.pts for txtln in unique_txtlns]
+        texts = [txtln.text for txtln in unique_txtlns]
         region = TextBlock(lines, texts, font_size=font_size, angle=angle, prob=np.exp(total_logprobs),
                            fg_color=fg_color, bg_color=bg_color)
         text_regions.append(region)

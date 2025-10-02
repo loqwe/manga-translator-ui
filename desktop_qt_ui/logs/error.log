@@ -1,0 +1,145 @@
+2025-09-22 12:41:51 - editor.editor_controller - ERROR - _async_refine_and_inpaint:219 - Error during inpainting process: 'EditorModel' object has no attribute 'set_inpainted_image'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 213, in _async_refine_and_inpaint
+    self.model.set_inpainted_image(inpainted_image)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'EditorModel' object has no attribute 'set_inpainted_image'
+2025-09-22 15:27:51 - editor.editor_controller - ERROR - _async_refine_and_inpaint:219 - Error during inpainting process: 'AppSettings' object has no attribute 'get'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 177, in _async_refine_and_inpaint
+    inpainter_config_dict = config.get('inpainter', {})
+                            ^^^^^^^^^^
+  File "C:\Users\徐浩文\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic\main.py", line 991, in __getattr__
+    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}')
+AttributeError: 'AppSettings' object has no attribute 'get'
+2025-09-22 20:38:36 - app_logic - ERROR - update_single_config:262 - Error saving single config change for app.last_output_path: "AppSection" object has no field "last_output_path"
+2025-09-22 20:58:54 - app_logic - ERROR - update_single_config:262 - Error saving single config change for app.last_output_path: "AppSection" object has no field "last_output_path"
+2025-09-22 21:03:00 - app_logic - ERROR - update_single_config:262 - Error saving single config change for app.last_output_path: "AppSection" object has no field "last_output_path"
+2025-09-22 21:40:24 - app_logic - ERROR - shutdown:580 - 应用关闭异常: 'TranslationService' object has no attribute 'cleanup'
+2025-09-22 21:50:21 - app_logic - ERROR - shutdown:563 - 应用关闭异常: 'TranslationService' object has no attribute 'cleanup'
+2025-09-22 22:21:41 - app_logic - ERROR - on_task_error:540 - 翻译任务发生错误: manga_translator.config.Config() got multiple values for keyword argument 'translator'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\app_logic.py", line 681, in process
+    config = Config(
+             ^^^^^^^
+TypeError: manga_translator.config.Config() got multiple values for keyword argument 'translator'
+
+2025-09-22 22:31:04 - app_logic - ERROR - shutdown:605 - 应用关闭异常: 'TranslationService' object has no attribute 'cleanup'
+2025-09-22 23:06:11 - app_logic - ERROR - on_task_error:582 - 翻译任务发生错误: cannot import name 'manga_translator' from 'manga_translator.manga_translator' (C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\..\manga_translator\manga_translator.py)
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\app_logic.py", line 696, in _do_processing
+    from manga_translator.manga_translator import manga_translator as mt_main
+ImportError: cannot import name 'manga_translator' from 'manga_translator.manga_translator' (C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\..\manga_translator\manga_translator.py). Did you mean: 'MangaTranslator'?
+
+2025-09-22 23:15:27 - app_logic - ERROR - on_task_finished:570 - 处理任务结果时发生严重错误: 'AppSettings' object has no attribute 'format'
+2025-09-25 18:59:16 - editor.editor_controller - ERROR - _async_translation_task:552 - Error during async translation task: 'MangaTranslator' object has no attribute 'translator'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 523, in _async_translation_task
+    actual_translator_engine = orchestrator.translator
+                               ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'MangaTranslator' object has no attribute 'translator'. Did you mean: 'translate'?
+2025-09-26 17:48:14 - editor.editor_controller - ERROR - _async_export_editor_image:1087 - Error during async export: 'RenderParameterService' object has no attribute 'to_backend_format'
+2025-09-26 17:52:26 - editor.editor_controller - ERROR - _call_backend_render:1147 - Backend render call failed: name 'PILImage' is not defined
+2025-09-26 17:52:26 - editor.editor_controller - ERROR - _async_export_editor_image:1076 - Backend rendering failed
+2025-09-26 17:52:26 - editor.editor_controller - ERROR - _async_export_editor_image:1098 - Error during async export: cannot access local variable 'QMetaObject' where it is not associated with a value
+2025-09-26 17:57:11 - editor.editor_controller - ERROR - _async_export_editor_image:1102 - Error during async export: arguments did not match any overloaded call:
+  invokeMethod(obj: Optional[QObject], member: Optional[str], a2: Qt.ConnectionType, ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], type: Qt.ConnectionType, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+2025-09-26 18:12:39 - editor.editor_controller - ERROR - _async_export_editor_image:1109 - Error during async export: arguments did not match any overloaded call:
+  invokeMethod(obj: Optional[QObject], member: Optional[str], a2: Qt.ConnectionType, ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], type: Qt.ConnectionType, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+2025-09-26 18:26:27 - editor.editor_controller - ERROR - _async_export_editor_image:1109 - Error during async export: arguments did not match any overloaded call:
+  invokeMethod(obj: Optional[QObject], member: Optional[str], a2: Qt.ConnectionType, ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], ret: QGenericReturnArgument, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], type: Qt.ConnectionType, value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+  invokeMethod(obj: Optional[QObject], member: Optional[str], value0: QGenericArgument = QGenericArgument(nullptr), value1: QGenericArgument = QGenericArgument(), value2: QGenericArgument = QGenericArgument(), value3: QGenericArgument = QGenericArgument(), value4: QGenericArgument = QGenericArgument(), value5: QGenericArgument = QGenericArgument(), value6: QGenericArgument = QGenericArgument(), value7: QGenericArgument = QGenericArgument(), value8: QGenericArgument = QGenericArgument(), value9: QGenericArgument = QGenericArgument()): argument 2 has unexpected type 'function'
+2025-09-26 18:48:28 - editor.editor_controller - ERROR - _call_backend_render:1028 - Backend render call failed: 1 validation error for Config
+translator
+  Input should be a valid dictionary or instance of TranslatorConfig [type=model_type, input_value='none', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.11/v/model_type
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 1018, in _call_backend_render
+    config = Config(**final_params)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\徐浩文\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic\main.py", line 253, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Config
+translator
+  Input should be a valid dictionary or instance of TranslatorConfig [type=model_type, input_value='none', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.11/v/model_type
+2025-09-26 18:48:28 - editor.editor_controller - ERROR - _async_export_editor_image:949 - Backend rendering failed, did not return an image object.
+2025-09-26 18:49:56 - editor.editor_controller - ERROR - _async_export_editor_image:953 - Error during async export: 'EditorController' object has no attribute '_call_backend_render'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 905, in _async_export_editor_image
+    rendered_image = await self._call_backend_render(image, regions, mask, render_params)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'EditorController' object has no attribute '_call_backend_render'
+2025-09-26 19:07:45 - editor.editor_controller - ERROR - _call_backend_render:873 - Backend render call failed: name 'CustomJSONEncoder' is not defined
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 842, in _call_backend_render
+    json.dump(formatted_data, f, ensure_ascii=False, cls=CustomJSONEncoder)
+                                                         ^^^^^^^^^^^^^^^^^
+NameError: name 'CustomJSONEncoder' is not defined
+2025-09-26 19:07:45 - editor.editor_controller - ERROR - _async_export_editor_image:1073 - Backend rendering failed, did not return an image object.
+2025-09-26 19:22:28 - editor.editor_controller - ERROR - load_image_and_regions:616 - Error loading image and regions: 'FileService' object has no attribute 'load_image_and_regions'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 589, in load_image_and_regions
+    result = self.file_service.load_image_and_regions(image_path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'FileService' object has no attribute 'load_image_and_regions'
+2025-09-26 19:40:04 - editor.editor_controller - ERROR - _async_export_with_desktop_ui_service:835 - Error during async export: No module named 'utils'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 800, in _async_export_with_desktop_ui_service
+    from services.export_service import ExportService
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\services\export_service.py", line 18, in <module>
+    from utils.json_encoder import CustomJSONEncoder
+ModuleNotFoundError: No module named 'utils'
+2025-09-26 20:25:39 - app_logic - ERROR - on_task_error:523 - 翻译任务发生错误: 1 validation error for RenderConfig
+direction
+  Input should be 'auto', 'horizontal' or 'vertical' [type=enum, input_value='h', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.11/v/enum
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\app_logic.py", line 671, in _do_processing
+    render=RenderConfig(**render_config_data),
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\徐浩文\AppData\Local\Programs\Python\Python312\Lib\site-packages\pydantic\main.py", line 253, in __init__
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+pydantic_core._pydantic_core.ValidationError: 1 validation error for RenderConfig
+direction
+  Input should be 'auto', 'horizontal' or 'vertical' [type=enum, input_value='h', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.11/v/enum
+
+2025-10-02 00:22:29 - editor.editor_controller - ERROR - error_callback:1138 - Export error: 后端渲染导出失败: unknown file extension: .tmp
+2025-10-02 23:31:20 - editor.editor_controller - ERROR - load_image_and_regions:277 - Error loading image and regions: [Errno 13] Permission denied: 'D:\\xiazai\\图片助手(ImageAssistant)_批量图片下载器\\並行世界の君君僕僕 第16話(1)'
+2025-10-03 00:23:08 - app_logic - ERROR - on_task_error:604 - 翻译任务发生错误: 'TranslationWorker' object has no attribute 'source_files'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\app_logic.py", line 792, in _do_processing
+    for path in self.source_files:
+                ^^^^^^^^^^^^^^^^^
+AttributeError: 'TranslationWorker' object has no attribute 'source_files'
+
+2025-10-03 00:32:53 - app_logic - ERROR - on_task_error:604 - 翻译任务发生错误: Task stopped by user.
+2025-10-03 00:38:08 - app_logic - ERROR - on_task_error:604 - 翻译任务发生错误: 
+2025-10-03 00:38:26 - app_logic - ERROR - on_task_error:604 - 翻译任务发生错误: 
+2025-10-03 00:40:07 - editor.editor_controller - ERROR - load_image_and_regions:303 - Error loading image and regions: [Errno 2] No such file or directory: 'D:/xiazai/图片助手(ImageAssistant)_批量图片下载器/output\\並行世界の君君僕僕 第16話(1)\\001.jpeg'
+2025-10-03 01:02:48 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 
+2025-10-03 01:29:29 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 
+2025-10-03 01:32:11 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 
+2025-10-03 01:39:54 - editor.editor_controller - ERROR - load_image_and_regions:304 - Error loading image and regions: [Errno 13] Permission denied: 'D:\\xiazai\\图片助手(ImageAssistant)_批量图片下载器\\並行世界の君君僕僕 第16話(1)'
+Traceback (most recent call last):
+  File "C:\Users\徐浩文\manga-image-translator\manga-translator-ui-package\desktop_qt_ui\editor\editor_controller.py", line 232, in load_image_and_regions
+    image = Image.open(image_path)
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\徐浩文\AppData\Local\Programs\Python\Python312\Lib\site-packages\PIL\Image.py", line 3513, in open
+    fp = builtins.open(filename, "rb")
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'D:\\xiazai\\图片助手(ImageAssistant)_批量图片下载器\\並行世界の君君僕僕 第16話(1)'
+2025-10-03 01:52:33 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 
+2025-10-03 02:03:34 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 
+2025-10-03 02:07:20 - app_logic - ERROR - on_task_error:607 - 翻译任务发生错误: 

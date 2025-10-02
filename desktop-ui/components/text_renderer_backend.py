@@ -108,6 +108,9 @@ class BackendTextRenderer:
         if not transform_service or text_blocks is None:
             return
 
+        # 存储区域总数供_draw_region_text使用
+        self._total_region_count = len(text_blocks) if text_blocks else 1
+
         hide_indices = hide_indices or set()
         self.canvas.delete("region_text_backend")
         self.canvas.delete("region_box")
@@ -190,7 +193,9 @@ class BackendTextRenderer:
                     if text_block.horizontal:
                         temp_box = put_text_horizontal(text_block.font_size, text_block.get_translation_for_rendering(), render_w, render_h, text_block.alignment, text_block.direction == 'hl', fg_color, bg_color, text_block.target_lang, hyphenate, line_spacing, config=config_obj)
                     else:
-                        temp_box = put_text_vertical(text_block.font_size, text_block.get_translation_for_rendering(), render_h, text_block.alignment, fg_color, bg_color, line_spacing, config=config_obj)
+                        # 传递正确的区域数量以确保智能缩放模式下的换行逻辑正确工作
+                        region_count = getattr(self, '_total_region_count', 1)
+                        temp_box = put_text_vertical(text_block.font_size, text_block.get_translation_for_rendering(), render_h, text_block.alignment, fg_color, bg_color, line_spacing, config=config_obj, region_count=region_count)
 
                     if temp_box is None or temp_box.size == 0:
                         return
@@ -213,10 +218,11 @@ class BackendTextRenderer:
                     if h_ext >= 0: 
                         box = np.zeros((h_temp + h_ext * 2, w_temp, 4), dtype=np.uint8)
                         box[h_ext:h_ext+h_temp, 0:w_temp] = temp_box
-                else:   
-                    w_ext = int((h_temp * r_orig - w_temp) // 2)  
-                    if w_ext >= 0: 
+                else:
+                    w_ext = int((h_temp * r_orig - w_temp) // 2)
+                    if w_ext >= 0:
                         box = np.zeros((h_temp, w_temp + w_ext * 2, 4), dtype=np.uint8)
+                        # 匹配后端逻辑：文字放在左侧
                         box[0:h_temp, 0:w_temp] = temp_box
             else:  
                 if r_temp > r_orig and r_orig > 0:   

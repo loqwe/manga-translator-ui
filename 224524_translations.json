@@ -64,7 +64,7 @@
                     "いられない…!!"
                 ],
                 "text": "でなきゃおれはここに立っていられない…!!",
-                "translation": "否则我就没脸站在这里…！！",
+                "translation": "不然【BR】我就无法【BR】站在这里了…!!",
                 "angle": 0,
                 "font_size": 29,
                 "fg_colors": [
@@ -84,7 +84,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9691566752466735
+                "prob": 0.6117740960328742
             },
             {
                 "lines": [
@@ -131,7 +131,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9998969223082547
+                "prob": 0.9849371314048767
             },
             {
                 "lines": [
@@ -178,7 +178,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9998738142137721
+                "prob": 0.9790495038032532
             },
             {
                 "lines": [
@@ -225,7 +225,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9724924576459256
+                "prob": 0.3377358615398407
             },
             {
                 "lines": [
@@ -271,7 +271,7 @@
                     "あんたの子供達を"
                 ],
                 "text": "見ず知らずのあんたの子供達を",
-                "translation": "救你那素不相识的孩子们",
+                "translation": "素不相识的【BR】你的孩子们",
                 "angle": 0,
                 "font_size": 30,
                 "fg_colors": [
@@ -291,7 +291,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9999941543670563
+                "prob": 0.9998781980113995
             },
             {
                 "lines": [
@@ -338,7 +338,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9317843444720209
+                "prob": 0.3909649848937988
             },
             {
                 "lines": [
@@ -403,7 +403,7 @@
                     "150名‼"
                 ],
                 "text": "――その他ﾞＲ脱兎ﾞ 150名‼",
-                "translation": "——以及其他「R级脱兔」【BR】150名！！",
+                "translation": "——以及其他【BR】R级脱兔【BR】150名‼",
                 "angle": 0,
                 "font_size": 29,
                 "fg_colors": [
@@ -423,7 +423,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9706019486881209
+                "prob": 0.4351895767488379
             },
             {
                 "lines": [
@@ -450,7 +450,7 @@
                     "ウオオオ"
                 ],
                 "text": "ウオオオ",
-                "translation": "喔喔喔喔",
+                "translation": "唔哦哦哦",
                 "angle": 0,
                 "font_size": 43,
                 "fg_colors": [
@@ -470,7 +470,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9982439495427228
+                "prob": 0.9372879266738892
             },
             {
                 "lines": [
@@ -573,7 +573,7 @@
                     "1万点‼"
                 ],
                 "text": "ご紹介しましたﾞＳＲ脱兎ﾞ 13名の点は1万点‼",
-                "translation": "刚才介绍的「SR级脱兔」【BR】13名，每人1万点！！",
+                "translation": "刚才介绍的【BR】SR级脱兔【BR】13名【BR】的分数是【BR】1万点‼",
                 "angle": 0,
                 "font_size": 33,
                 "fg_colors": [
@@ -593,7 +593,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.946943136438496
+                "prob": 0.5465586557162572
             },
             {
                 "lines": [
@@ -639,7 +639,7 @@
                     "ああ‼"
                 ],
                 "text": "うわあああ‼",
-                "translation": "哇啊啊啊啊！！",
+                "translation": "呜哇【BR】啊啊啊‼",
                 "angle": 0,
                 "font_size": 41,
                 "fg_colors": [
@@ -659,7 +659,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9798827877806315
+                "prob": 0.5997922657009351
             },
             {
                 "lines": [
@@ -743,7 +743,7 @@
                     "よ‼"
                 ],
                 "text": "さァ逃げろ‼脱兎ﾞ達よ‼",
-                "translation": "来吧，快逃吧！！【BR】「脱兔」们！！",
+                "translation": "来吧【BR】快逃吧‼【BR】脱兔们【BR】啊‼",
                 "angle": 0,
                 "font_size": 35,
                 "fg_colors": [
@@ -763,7 +763,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9525001828773432
+                "prob": 0.45222121933725673
             },
             {
                 "lines": [
@@ -790,7 +790,7 @@
                     "・hあぁぁあぁ"
                 ],
                 "text": "・hあぁぁあぁ",
-                "translation": "啊啊啊啊啊",
+                "translation": "哇啊啊啊啊",
                 "angle": 0,
                 "font_size": 171,
                 "fg_colors": [
@@ -810,7 +810,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.44783525256239387
+                "prob": 0.1277219355106354
             },
             {
                 "lines": [
@@ -894,7 +894,7 @@
                     "します‼"
                 ],
                 "text": "一時間後に狩りをスタートします‼",
-                "translation": "一小时后【BR】狩猎开始！！",
+                "translation": "一小时后【BR】狩猎【BR】正式开始‼",
                 "angle": 0,
                 "font_size": 33,
                 "fg_colors": [
@@ -914,7 +914,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9942486055273054
+                "prob": 0.9274302069775988
             },
             {
                 "lines": [
@@ -1017,7 +1017,7 @@
                     "のか⁉"
                 ],
                 "text": "うそだろ⁉本当に今から殺されるのか⁉",
-                "translation": "骗人的吧！？【BR】真的现在就要被杀了吗！？",
+                "translation": "骗人的吧⁉【BR】真的【BR】现在就要【BR】被杀掉【BR】吗⁉",
                 "angle": 0,
                 "font_size": 26,
                 "fg_colors": [
@@ -1037,7 +1037,7 @@
                 "line_spacing": 1.0,
                 "default_stroke_width": 0.2,
                 "adjust_bg_color": true,
-                "prob": 0.9985865122345596
+                "prob": 0.9738221074819022
             }
         ],
         "original_width": 1096,

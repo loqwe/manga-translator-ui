@@ -39,7 +39,7 @@ pyclipper
 pydantic
 git+https://github.com/lucasb-eyer/pydensecrf.git
 PyHyphen
-PySide6
+PyQt6
 python-dotenv
 rich
 rusty_manga_image_translator
