@@ -422,7 +422,10 @@ class MainView(QWidget):
     def _debounced_save_env_var(self, key: str, text: str):
         """防抖保存.env变量"""
         self._env_debounce_timer.stop()
-        self._env_debounce_timer.timeout.disconnect()
+        try:
+            self._env_debounce_timer.timeout.disconnect()
+        except TypeError:
+            pass  # No connection to disconnect, which is fine.
         self._env_debounce_timer.timeout.connect(lambda: self.env_var_changed.emit(key, text))
         self._env_debounce_timer.start()
 
