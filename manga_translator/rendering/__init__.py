@@ -119,6 +119,171 @@ def count_text_length(text: str) -> float:
             length += 1.0
     return length
 
+def generate_line_break_combinations(text: str):
+    """
+    Generate all possible line break combinations from a text with [BR] markers.
+    Returns a list of tuples: (modified_text, combination_description, skip_reason or None)
+    """
+    import itertools
+    
+    # Standardize all break markers to [BR] (including full-width brackets)
+    text = re.sub(r'\s*(<br>|【BR】)\s*', '[BR]', text, flags=re.IGNORECASE)
+    
+    # Find all [BR] positions
+    breaks = []
+    pattern = r'\[BR\]'
+    for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+        breaks.append((match.start(), match.end()))
+    
+    if not breaks:
+        # No breaks, return original text
+        return [(text, "no_breaks", None)]
+    
+    combinations = []
+    
+    # Add original (keep all breaks)
+    combinations.append((text, "all_breaks", None))
+    
+    # Generate all possible combinations (remove 1, 2, 3, ... n breaks)
+    n_breaks = len(breaks)
+    for r in range(1, n_breaks + 1):
+        for combo in itertools.combinations(range(n_breaks), r):
+            # Create a version with selected breaks removed
+            # Split first to check first segment length
+            segments = re.split(pattern, text, flags=re.IGNORECASE)
+            
+            # Check skip condition: if first segment has < 2 chars and we're removing break 0
+            if 0 in combo and len(segments[0].strip()) < 2:
+                skip_reason = "first_segment_too_short"
+                combinations.append((None, f"remove_{combo}", skip_reason))
+                continue
+            
+            # Build modified text
+            offset = 0
+            modified_text = text
+            for idx in sorted(combo, reverse=True):  # Remove from right to left
+                start, end = breaks[idx]
+                modified_text = modified_text[:start - offset] + modified_text[end - offset:]
+                offset += (end - start)
+            
+            combinations.append((modified_text, f"remove_{combo}", None))
+    
+    return combinations
+
+def calculate_uniformity(lines: List[str]) -> float:
+    """
+    Calculate uniformity score for line lengths.
+    Lower score = more uniform (better).
+    Uses coefficient of variation (std/mean).
+    """
+    if not lines or len(lines) <= 1:
+        return 0.0
+    
+    lengths = [len(line.strip()) for line in lines]
+    if not lengths or sum(lengths) == 0:
+        return float('inf')
+    
+    mean_length = np.mean(lengths)
+    std_length = np.std(lengths)
+    
+    # Coefficient of variation
+    cv = std_length / mean_length if mean_length > 0 else float('inf')
+    return cv
+
+def optimize_line_breaks_for_region(region: TextBlock, config: Config, target_font_size: int, bubble_width: float, bubble_height: float):
+    """
+    Optimize line breaks for a single region by testing all combinations.
+    Returns the best text variant and the font size it achieves.
+    """
+    original_translation = region.translation
+    combinations = generate_line_break_combinations(original_translation)
+    
+    best_text = original_translation
+    best_font_size = 0
+    best_uniformity = float('inf')
+    
+    logger.debug(f"[OPTIMIZE_LINE_BREAKS] Testing {len(combinations)} combinations")
+    
+    for text_variant, combo_desc, skip_reason in combinations:
+        if skip_reason:
+            logger.debug(f"[OPTIMIZE_LINE_BREAKS] Skipping {combo_desc}: {skip_reason}")
+            continue
+        
+        # Convert [BR] to \n for calculation
+        text_for_calc = re.sub(r'\s*\[BR\]\s*', '\n', text_variant, flags=re.IGNORECASE)
+        
+        try:
+            # Calculate required dimensions
+            if region.horizontal:
+                lines, widths = text_render.calc_horizontal(
+                    target_font_size, text_for_calc, 
+                    max_width=99999, max_height=99999, 
+                    language=region.target_lang
+                )
+                if widths:
+                    spacing_y = int(target_font_size * (config.render.line_spacing or 0.01))
+                    required_width = max(widths)
+                    required_height = target_font_size * len(lines) + spacing_y * max(0, len(lines) - 1)
+                else:
+                    continue
+            else:  # Vertical
+                if config.render.auto_rotate_symbols:
+                    text_for_calc = text_render.auto_add_horizontal_tags(text_for_calc)
+                
+                lines, heights = text_render.calc_vertical(target_font_size, text_for_calc, max_height=99999)
+                if heights:
+                    spacing_x = int(target_font_size * (config.render.line_spacing or 0.2))
+                    required_height = max(heights)
+                    required_width = target_font_size * len(lines) + spacing_x * max(0, len(lines) - 1)
+                else:
+                    continue
+            
+            # Calculate how much the text fits in the bubble
+            # Larger font size is better
+            width_ratio = bubble_width / required_width if required_width > 0 else 1.0
+            height_ratio = bubble_height / required_height if required_height > 0 else 1.0
+            fit_ratio = min(width_ratio, height_ratio)
+            
+            # Calculate effective font size for this combination
+            effective_font_size = target_font_size * fit_ratio
+            
+            # Calculate uniformity
+            uniformity = calculate_uniformity(lines)
+            
+            logger.debug(f"[OPTIMIZE_LINE_BREAKS] {combo_desc}: font_size={effective_font_size:.1f}, uniformity={uniformity:.3f}")
+            
+            # Choose the best: prioritize font size, then uniformity
+            is_better = False
+            if effective_font_size > best_font_size + 0.5:  # Significantly larger font
+                is_better = True
+            elif abs(effective_font_size - best_font_size) <= 0.5:  # Similar font size
+                if uniformity < best_uniformity:  # Better uniformity
+                    is_better = True
+            
+            if is_better:
+                best_text = text_variant
+                best_font_size = effective_font_size
+                best_uniformity = uniformity
+                logger.debug(f"[OPTIMIZE_LINE_BREAKS] New best: {combo_desc}")
+        
+        except Exception as e:
+            logger.warning(f"[OPTIMIZE_LINE_BREAKS] Error evaluating {combo_desc}: {e}")
+            continue
+    
+    # Compare and log optimization results
+    original_br_count = len(re.findall(r'\[BR\]', original_translation, flags=re.IGNORECASE))
+    optimized_br_count = len(re.findall(r'\[BR\]', best_text, flags=re.IGNORECASE))
+    
+    if optimized_br_count < original_br_count:
+        removed_count = original_br_count - optimized_br_count
+        logger.info(f"[AI断句自动扩大文字] 优化完成：去掉了 {removed_count} 个换行符，字体大小提升至 {best_font_size:.1f}px")
+        logger.info(f"[AI断句自动扩大文字] 原文: {original_translation}")
+        logger.info(f"[AI断句自动扩大文字] 优化后: {best_text}")
+    else:
+        logger.info(f"[AI断句自动扩大文字] 未进行优化：保持原断句方案最佳，字体大小 {best_font_size:.1f}px")
+    
+    return best_text, best_font_size
+
 def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock'], config: Config, original_img: np.ndarray = None, return_debug_img: bool = False):
     """
     Resize text regions based on layout mode.
@@ -198,6 +363,16 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                 balloon_height = region_h
                 
                 logger.info(f"Balloon size: {balloon_width}x{balloon_height} at ({balloon_x1}, {balloon_y1})")
+                
+                # Optimize line breaks if enabled
+                has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
+                if config.render.optimize_line_breaks and config.render.disable_auto_wrap and has_br:
+                    logger.info(f"[OPTIMIZE] Optimizing line breaks for balloon_fill mode")
+                    optimized_text, _ = optimize_line_breaks_for_region(
+                        region, config, target_font_size, balloon_width, balloon_height
+                    )
+                    region.translation = optimized_text
+                    logger.info(f"[OPTIMIZE] Optimized text: {region.translation}")
                 
                 # Step 2: Calculate required text dimensions
                 required_width = 0
@@ -346,6 +521,17 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
 
         # --- Mode 2: strict ---
         elif mode == 'strict':
+            # Optimize line breaks if enabled
+            has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
+            if config.render.optimize_line_breaks and config.render.disable_auto_wrap and has_br:
+                bubble_width, bubble_height = region.unrotated_size
+                logger.info(f"[OPTIMIZE] Optimizing line breaks for strict mode")
+                optimized_text, _ = optimize_line_breaks_for_region(
+                    region, config, target_font_size, bubble_width, bubble_height
+                )
+                region.translation = optimized_text
+                logger.info(f"[OPTIMIZE] Optimized text: {region.translation}")
+            
             font_size = target_font_size
             min_shrink_font_size = max(min_font_size, 8)
 
@@ -409,6 +595,16 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
 
         # --- Mode 3: default (uses old logic, unchanged) ---
         elif mode == 'default':
+            # Optimize line breaks if enabled
+            has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
+            if config.render.optimize_line_breaks and config.render.disable_auto_wrap and has_br:
+                bubble_width, bubble_height = region.unrotated_size
+                logger.info(f"[OPTIMIZE] Optimizing line breaks for default mode")
+                optimized_text, _ = optimize_line_breaks_for_region(
+                    region, config, target_font_size, bubble_width, bubble_height
+                )
+                region.translation = optimized_text
+                logger.info(f"[OPTIMIZE] Optimized text: {region.translation}")
 
             font_size_fixed = config.render.font_size
             font_size_offset = config.render.font_size_offset
@@ -505,6 +701,14 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         unrotated_base_poly = Polygon(region.unrotated_min_rect[0])
                     except Exception:
                         unrotated_base_poly = Polygon([(0, 0), (bubble_width, 0), (bubble_width, bubble_height), (0, bubble_height)])
+
+                    # Optimize line breaks if enabled
+                    has_br = bool(re.search(r'(\[BR\]|【BR】|<br>)', region.translation, flags=re.IGNORECASE))
+                    if config.render.optimize_line_breaks and config.render.disable_auto_wrap and has_br:
+                        optimized_text, _ = optimize_line_breaks_for_region(
+                            region, config, target_font_size, bubble_width, bubble_height
+                        )
+                        region.translation = optimized_text
 
                     # Calculate required width and height (no auto wrap)
                     required_width = 0

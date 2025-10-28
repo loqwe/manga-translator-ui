@@ -52,6 +52,7 @@ class RenderParameters:
     max_font_size: int = 0  # 最大字体大小
     font_scale_ratio: float = 1.0  # 字体缩放比例
     center_text_in_bubble: bool = False  # AI断句时文本居中
+    optimize_line_breaks: bool = False  # 自动优化断句
 
     # 效果参数
     stroke_width: float = 0.2  # 描边宽度

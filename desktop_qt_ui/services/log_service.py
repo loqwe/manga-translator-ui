@@ -71,6 +71,9 @@ class LogService:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
         
+        # 保存 console_handler 引用以便后续动态调整
+        self.console_handler = console_handler
+        
         # 创建格式化器
         detailed_formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
@@ -129,6 +132,21 @@ class LogService:
                     pass  # 防止日志处理器本身出错
         
         return MemoryHandler(self)
+    
+    def set_console_log_level(self, verbose: bool = False):
+        """
+        根据 verbose 配置设置控制台日志级别
+        
+        Args:
+            verbose: 是否启用详细日志（DEBUG 级别）
+        """
+        if hasattr(self, 'console_handler'):
+            if verbose:
+                self.console_handler.setLevel(logging.DEBUG)
+                logger = logging.getLogger(self.app_name)
+                logger.info("[日志服务] 控制台日志级别已设置为 DEBUG（详细日志）")
+            else:
+                self.console_handler.setLevel(logging.INFO)
     
     def get_logger(self, name: str = None) -> logging.Logger:
         """获取日志器"""

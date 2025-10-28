@@ -172,6 +172,8 @@ class RenderConfig(BaseModel):
     """Font size scale ratio. Applied before max_font_size limit"""
     center_text_in_bubble: bool = False
     """Center the entire text block in the bubble when AI line breaking is enabled"""
+    optimize_line_breaks: bool = False
+    """Automatically optimize line breaks by testing all combinations to find the best font size"""
     direction: Direction = Direction.auto
     """Force text to be rendered horizontally/vertically/none"""
     uppercase: bool = False

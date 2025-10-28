@@ -367,6 +367,7 @@ class MainAppLogic(QObject):
                     "disable_auto_wrap": "AI断句", "font_size_offset": "字体大小偏移量", "font_size_minimum": "最小字体大小",
                     "max_font_size": "最大字体大小", "font_scale_ratio": "字体缩放比例",
                     "center_text_in_bubble": "AI断句时文本居中",
+                    "optimize_line_breaks": "AI断句自动扩大文字",
                     "direction": "文本方向", "uppercase": "大写", "lowercase": "小写", "gimp_font": "GIMP字体",
                     "font_path": "字体路径", "no_hyphenation": "禁用连字符", "font_color": "字体颜色",
                     "auto_rotate_symbols": "竖排内横排", "rtl": "从右到左", "layout_mode": "排版模式",

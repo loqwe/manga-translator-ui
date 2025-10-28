@@ -63,6 +63,16 @@ class ServiceContainer:
         self.services['log'] = LogService()
         self.services['state'] = StateManager()
         self.services['config'] = ConfigService(self.root_dir)
+        
+        # 根据配置设置日志级别
+        try:
+            config = self.services['config'].get_config()
+            if hasattr(config, 'cli') and hasattr(config.cli, 'verbose'):
+                verbose = config.cli.verbose
+                self.services['log'].set_console_log_level(verbose)
+        except Exception as e:
+            self.logger.warning(f"设置日志级别失败: {e}")
+        
         self.services['state'].set_app_ready(True)
         self.logger.info("基础服务初始化完成")
     

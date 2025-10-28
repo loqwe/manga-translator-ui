@@ -24,6 +24,7 @@ kornia
 langcodes
 loguru
 manga-ocr
+matplotlib
 networkx
 numpy
 omegaconf
