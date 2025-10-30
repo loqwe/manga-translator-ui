@@ -21,8 +21,7 @@ dist/
 build/
 result/
 
-# PyInstaller
-*.spec
+
 
 # Batch files and executables
 *.bat
