@@ -79,6 +79,10 @@ def main():
             print("[提示] 发现新版本可用！")
             print("请运行 步骤4-更新维护.bat 进行更新")
             print("")
+        elif remote_version == current_version:
+            print("")
+            print("[信息] 已是最新版本")
+            print("")
     else:
         # 详细模式 - 用于脚本4（更新维护）
         print(f"当前版本 - {current_version}")
