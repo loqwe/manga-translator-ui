@@ -24,7 +24,6 @@ result/
 
 
 # Batch files and executables
-*.bat
 *.exe
 *.sh
 
