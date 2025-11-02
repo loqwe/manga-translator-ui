@@ -53,6 +53,12 @@ echo ========================================
 REM 使用Python脚本检查版本（避免批处理冒号问题）
 python packaging\check_version.py
 
+REM 获取版本信息供后续使用
+for /f "tokens=1,2 delims==" %%a in ('python packaging\check_version.py --export-vars') do (
+    if "%%a"=="CURRENT_VERSION" set CURRENT_VERSION=%%b
+    if "%%a"=="REMOTE_VERSION" set REMOTE_VERSION=%%b
+)
+
 echo.
 echo ========================================
 
@@ -93,31 +99,6 @@ echo 更新代码 (强制同步)
 echo ========================================
 echo.
 
-if not defined CURRENT_VERSION (
-    if exist "packaging\VERSION" (
-        set /p CURRENT_VERSION=<packaging\VERSION
-    ) else (
-        set CURRENT_VERSION=unknown
-    )
-)
-
-if not defined REMOTE_VERSION (
-    set REMOTE_VERSION=unknown
-)
-
-echo 当前版本 - !CURRENT_VERSION!
-echo 远程版本 - !REMOTE_VERSION!
-echo.
-
-if "!CURRENT_VERSION!"=="!REMOTE_VERSION!" (
-    echo [信息] 当前已是最新版本
-    echo.
-    set /p still_update="是否仍要强制更新? (y/n): "
-    if /i not "!still_update!"=="y" (
-        goto menu
-    )
-)
-
 echo [警告] 将强制同步到远程分支,本地修改将被覆盖
 set /p confirm="是否继续更新? (y/n): "
 if /i not "!confirm!"=="y" (
@@ -131,10 +112,6 @@ echo 正在强制同步到远程分支...
 
 if %ERRORLEVEL% == 0 (
     echo [OK] 代码更新完成
-    if exist "packaging\VERSION" (
-        set /p NEW_VERSION=<packaging\VERSION
-        echo 更新后版本 - !NEW_VERSION!
-    )
 ) else (
     echo [ERROR] 代码更新失败
 )

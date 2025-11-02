@@ -52,6 +52,7 @@ def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='版本检查脚本')
     parser.add_argument('--brief', action='store_true', help='简洁模式：仅显示版本和更新提示')
+    parser.add_argument('--export-vars', action='store_true', help='导出环境变量格式（用于bat脚本）')
     args = parser.parse_args()
     
     current_version = get_current_version()
@@ -64,6 +65,12 @@ def main():
         pass
     
     remote_version = get_remote_version()
+    
+    # 导出环境变量格式（用于bat脚本）
+    if args.export_vars:
+        print(f"CURRENT_VERSION={current_version}")
+        print(f"REMOTE_VERSION={remote_version}")
+        return 0
     
     if args.brief:
         # 简洁模式 - 用于脚本3（启动界面）
