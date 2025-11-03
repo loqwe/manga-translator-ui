@@ -33,6 +33,9 @@ class ResourceManager:
         # 资源缓存（用于快速切换）
         self._image_cache: Dict[str, ImageResource] = {}
         self._cache_limit = 5  # 最多缓存5张图片
+        
+        # 通用缓存（用于存储临时数据）
+        self._temp_cache: Dict[str, any] = {}
     
     # ==================== 图片管理 ====================
     
@@ -257,6 +260,44 @@ class ResourceManager:
         self._regions.clear()
         self._next_region_id = 0
         self.logger.debug("Cleared all regions")
+    
+    # ==================== 缓存管理 ====================
+    
+    def set_cache(self, key: str, value: any) -> None:
+        """设置缓存数据
+        
+        Args:
+            key: 缓存键
+            value: 缓存值
+        """
+        self._temp_cache[key] = value
+        self.logger.debug(f"Set cache: {key}")
+    
+    def get_cache(self, key: str, default=None) -> any:
+        """获取缓存数据
+        
+        Args:
+            key: 缓存键
+            default: 默认值
+        
+        Returns:
+            缓存值，如果不存在返回default
+        """
+        return self._temp_cache.get(key, default)
+    
+    def clear_cache(self, key: Optional[str] = None) -> None:
+        """清空缓存
+        
+        Args:
+            key: 如果指定，只清空该键；否则清空所有缓存
+        """
+        if key:
+            if key in self._temp_cache:
+                del self._temp_cache[key]
+                self.logger.debug(f"Cleared cache: {key}")
+        else:
+            self._temp_cache.clear()
+            self.logger.debug("Cleared all cache")
     
     # ==================== 资源清理 ====================
     

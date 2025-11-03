@@ -62,11 +62,9 @@ class EditorController(QObject):
         self.config_service = get_config_service()
         self.resource_manager = get_resource_manager()  # 新的资源管理器
 
-        # 增量修复缓存 - TODO: 迁移到ResourceManager
-        self._last_inpainted_image = None  # 上一次完整的修复结果
-        
-        # DEBUG: 测试历史记录功能 - TODO: 迁移到ResourceManager
-        self._last_processed_mask = None   # 上一次处理的蒙版状态
+        # 缓存键常量
+        self.CACHE_LAST_INPAINTED = "last_inpainted_image"
+        self.CACHE_LAST_MASK = "last_processed_mask"
 
         # Connect internal signals for thread-safe updates
         self._update_refined_mask.connect(self.model.set_refined_mask)
@@ -267,9 +265,8 @@ class EditorController(QObject):
         # 清空历史记录
         self.history_service.clear()
 
-        # 清空缓存 - TODO: 迁移到ResourceManager
-        self._last_inpainted_image = None
-        self._last_processed_mask = None
+        # 清空缓存（使用ResourceManager）
+        self.resource_manager.clear_cache()
 
         # 清空渲染参数缓存
         from services import get_render_parameter_service
@@ -516,8 +513,8 @@ class EditorController(QObject):
                     self.model.set_inpainted_image(inpainted_image)
 
                     # 缓存完整修复结果，用于后续增量修复
-                    self._last_inpainted_image = inpainted_image_np.copy()
-                    self._last_processed_mask = refined_mask.copy()
+                    self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, inpainted_image_np.copy())
+                    self.resource_manager.set_cache(self.CACHE_LAST_MASK, refined_mask.copy())
 
                     self.logger.info("Existing inpainted image loaded successfully. Skipping inpainting step.")
                 except Exception as e:
@@ -569,8 +566,8 @@ class EditorController(QObject):
                         self.model.set_inpainted_image(inpainted_image)
 
                         # 缓存完整修复结果，用于后续增量修复
-                        self._last_inpainted_image = inpainted_image_np.copy()
-                        self._last_processed_mask = refined_mask.copy()
+                        self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, inpainted_image_np.copy())
+                        self.resource_manager.set_cache(self.CACHE_LAST_MASK, refined_mask.copy())
 
                         self.logger.info("Inpainting successful. Model updated and cached for incremental updates.")
                     else:
@@ -596,7 +593,8 @@ class EditorController(QObject):
                 return
 
             # 检查是否有缓存
-            if self._last_processed_mask is None:
+            last_processed_mask = self.resource_manager.get_cache(self.CACHE_LAST_MASK)
+            if last_processed_mask is None:
                 self.logger.info("No cached mask, falling back to full inpainting...")
                 await self._async_full_inpaint_with_cache(current_mask)
                 return
@@ -607,10 +605,10 @@ class EditorController(QObject):
             else:
                 current_mask_2d = current_mask.copy()
 
-            if len(self._last_processed_mask.shape) > 2:
-                last_mask_2d = cv2.cvtColor(self._last_processed_mask, cv2.COLOR_BGR2GRAY)
+            if len(last_processed_mask.shape) > 2:
+                last_mask_2d = cv2.cvtColor(last_processed_mask, cv2.COLOR_BGR2GRAY)
             else:
-                last_mask_2d = self._last_processed_mask.copy()
+                last_mask_2d = last_processed_mask.copy()
 
             # 计算所有变化区域
             added_areas = cv2.subtract(current_mask_2d, last_mask_2d)
@@ -694,17 +692,18 @@ class EditorController(QObject):
                 self.logger.info(f"Bounding box inpainting successful, result shape: {bbox_result.shape}")
 
                 # 将局部修复结果贴回完整图像
-                if self._last_inpainted_image is None:
+                last_inpainted = self.resource_manager.get_cache(self.CACHE_LAST_INPAINTED)
+                if last_inpainted is None:
                     full_result = image_np.copy()
                 else:
-                    full_result = self._last_inpainted_image.copy()
+                    full_result = last_inpainted.copy()
 
                 # 把修复结果贴回对应位置
                 full_result[y_min:y_max, x_min:x_max] = bbox_result
 
                 # 更新缓存
-                self._last_inpainted_image = full_result.copy()
-                self._last_processed_mask = current_mask_2d.copy()
+                self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, full_result.copy())
+                self.resource_manager.set_cache(self.CACHE_LAST_MASK, current_mask_2d.copy())
 
                 # 更新模型
                 final_image = Image.fromarray(full_result)
@@ -777,8 +776,8 @@ class EditorController(QObject):
 
             if inpainted_image_np is not None:
                 # 缓存结果
-                self._last_inpainted_image = inpainted_image_np.copy()
-                self._last_processed_mask = mask_2d.copy()
+                self.resource_manager.set_cache(self.CACHE_LAST_INPAINTED, inpainted_image_np.copy())
+                self.resource_manager.set_cache(self.CACHE_LAST_MASK, mask_2d.copy())
 
                 # 更新模型
                 inpainted_image = Image.fromarray(inpainted_image_np)
