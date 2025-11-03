@@ -114,6 +114,33 @@ class EditorController(QObject):
         elif mask_type == "refined":
             return self.model.get_refined_mask()
         return None
+    
+    def _get_regions(self):
+        """获取所有区域
+        
+        Returns:
+            List[Dict]: 区域列表
+        """
+        # 从ResourceManager获取
+        resources = self.resource_manager.get_all_regions()
+        if resources:
+            return [r.data for r in resources]
+        # 向后兼容
+        return self.model.get_regions()
+    
+    def _set_regions(self, regions: list):
+        """设置所有区域
+        
+        Args:
+            regions: 区域列表
+        """
+        # 清空现有区域
+        self.resource_manager.clear_regions()
+        # 添加新区域
+        for region_data in regions:
+            self.resource_manager.add_region(region_data)
+        # 同步到Model（向后兼容）
+        self.model.set_regions(regions)
 
     def set_view(self, view):
         """设置view引用，用于更新UI状态"""
@@ -336,7 +363,7 @@ class EditorController(QObject):
 
                 # 同步Model状态（View仍然监听Model的信号）
                 self.model.set_image(image)
-                self.model.set_regions([])  # 不加载regions
+                self._set_regions([])  # 不加载regions
                 self.model.set_raw_mask(None)
                 self.model.set_refined_mask(None)
                 self.model.set_inpainted_image_path(None)
@@ -363,7 +390,7 @@ class EditorController(QObject):
 
             # 同步Model状态（View仍然监听Model的信号）
             self.model.set_image(image)
-            self.model.set_regions(regions)
+            self._set_regions(regions)
 
             # 使用ResourceManager管理蒙版
             if raw_mask is not None:
@@ -410,7 +437,7 @@ class EditorController(QObject):
             self.logger.info("Starting async mask refinement and inpainting...")
             image = self._get_current_image()
             raw_mask = self.model.get_raw_mask() # Use the raw mask for refinement
-            regions = self.model.get_regions()
+            regions = self._get_regions()
 
             if image is None or raw_mask is None or not regions:
                 self.logger.warning("Refinement/Inpainting skipped: image, mask, or regions not available.")
@@ -1412,7 +1439,7 @@ class EditorController(QObject):
         self.logger.info("Toolbar: 'Export Image' requested.")
         try:
             image = self._get_current_image()
-            regions = self.model.get_regions()
+            regions = self._get_regions()
             if not image or not regions:
                 self.logger.warning("Cannot export: missing image or regions data")
                 if hasattr(self, 'toast_manager'):
