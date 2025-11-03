@@ -176,13 +176,33 @@ class GraphicsView(QGraphicsView):
         if self._refined_mask_item and self._refined_mask_item.scene():
             self.scene.removeItem(self._refined_mask_item)
             self._refined_mask_item = None
+        
+        if self._removed_mask_item and self._removed_mask_item.scene():
+            self.scene.removeItem(self._removed_mask_item)
+            self._removed_mask_item = None
+        
+        # 清空预览项（文本框、几何编辑、蒙版绘制等）
+        if self._textbox_preview_item and self._textbox_preview_item.scene():
+            self.scene.removeItem(self._textbox_preview_item)
+            self._textbox_preview_item = None
+        
+        if self._geometry_preview_item and self._geometry_preview_item.scene():
+            self.scene.removeItem(self._geometry_preview_item)
+            self._geometry_preview_item = None
+        
+        if self._preview_item and self._preview_item.scene():
+            self.scene.removeItem(self._preview_item)
+            self._preview_item = None
 
         # 清空缓存
         self._text_render_cache.clear()
         self._text_blocks_cache = []
         self._dst_points_cache = []
 
-        # 重置状态
+        # 重置所有绘制状态
+        self._is_drawing = False
+        self._is_drawing_geometry = False
+        self._is_drawing_textbox = False
         self._last_edited_region_index = None
 
     def on_image_changed(self, image):

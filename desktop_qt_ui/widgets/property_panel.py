@@ -579,7 +579,7 @@ class PropertyPanel(QWidget):
 
             # 2. 如果是竖排且开启了自动旋转符号,自动添加 <H> 标签(仅用于显示)
             direction = region_data.get('direction', 'auto')
-            is_vertical = direction == 'v'
+            is_vertical = direction in ('v', 'vertical')
             if direction == 'auto':
                 is_vertical = not region_data.get('horizontal', True)
 
@@ -634,7 +634,7 @@ class PropertyPanel(QWidget):
         alignment_map = {"auto": "自动", "left": "左对齐", "center": "居中", "right": "右对齐"}
         self.alignment_combo.setCurrentText(alignment_map.get(region_data.get("alignment", "auto"), "自动"))
         
-        direction_map = {"auto": "自动", "h": "横排", "v": "竖排"}
+        direction_map = {"auto": "自动", "horizontal": "横排", "vertical": "竖排", "h": "横排", "v": "竖排"}
         self.direction_combo.setCurrentText(direction_map.get(region_data.get("direction", "auto"), "自动"))
 
         # --- Update Mask Checkboxes ---

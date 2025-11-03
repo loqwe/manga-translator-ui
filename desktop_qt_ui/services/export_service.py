@@ -358,6 +358,14 @@ class ExportService:
             if 'target_lang' not in region_copy:
                 region_copy['target_lang'] = 'CHS'  # 默认目标语言
             
+            # 转换 direction 值：'v' -> 'vertical', 'h' -> 'horizontal'
+            if 'direction' in region_copy:
+                direction_value = region_copy['direction']
+                if direction_value == 'v':
+                    region_copy['direction'] = 'vertical'
+                elif direction_value == 'h':
+                    region_copy['direction'] = 'horizontal'
+            
             save_data.append(region_copy)
         
         # load_text模式期望的格式：字典，键为图片路径，值为包含regions的字典
@@ -452,7 +460,16 @@ class ExportService:
             image.name = image_path  # 确保图片名称正确，用于load_text模式查找翻译文件
 
             # 创建配置对象
-            render_config = config.get('render', {})
+            render_config = config.get('render', {}).copy()  # 使用copy避免修改原配置
+            
+            # 转换 direction 值：'v' -> 'vertical', 'h' -> 'horizontal'
+            if 'direction' in render_config:
+                direction_value = render_config['direction']
+                if direction_value == 'v':
+                    render_config['direction'] = 'vertical'
+                elif direction_value == 'h':
+                    render_config['direction'] = 'horizontal'
+            
             render_config['font_color'] = None # Explicitly disable global font color
             render_cfg = RenderConfig(**render_config)
 

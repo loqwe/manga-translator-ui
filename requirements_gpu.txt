@@ -25,7 +25,6 @@ langcodes==3.5.0
 loguru==0.7.3
 manga-ocr==0.1.14
 matplotlib==3.10.5
-ncnn==1.0.20250916
 networkx==3.5
 numpy>=2.0,<2.3
 omegaconf==2.3.0

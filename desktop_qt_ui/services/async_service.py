@@ -72,6 +72,32 @@ class AsyncService:
         # 定期清理
         if self._running:
             self._loop.call_later(30, self._cleanup_completed_tasks)
+    
+    def cancel_all_tasks(self):
+        """取消所有活跃的异步任务（非阻塞）"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not self._running:
+            return
+        
+        def _cancel():
+            try:
+                task_count = len(self._active_tasks)
+                if task_count > 0:
+                    logger.info(f"Cancelling {task_count} active tasks")
+                    cancelled_count = 0
+                    for task in list(self._active_tasks):
+                        if not task.done():
+                            task.cancel()
+                            cancelled_count += 1
+                    self._active_tasks.clear()
+                    logger.info(f"Cancelled {cancelled_count} tasks")
+            except Exception as e:
+                logger.error(f"Error cancelling tasks: {e}")
+        
+        # 异步调用，不阻塞主线程
+        self._loop.call_soon_threadsafe(_cancel)
 
     def shutdown(self):
         self._running = False

@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import os
 import sys
@@ -180,6 +181,10 @@ class EditorController(QObject):
     def _clear_editor_state(self):
         """清空编辑器状态"""
         self.logger.info("Clearing editor state")
+        
+        # 取消所有正在运行的后台任务
+        self.async_service.cancel_all_tasks()
+        self.logger.info("Cancelled all background tasks")
 
         # 清空模型数据
         self.model.set_regions([])
@@ -495,6 +500,9 @@ class EditorController(QObject):
                 except Exception as e:
                     self.logger.error(f"Error during inpainting process: {e}", exc_info=True)
 
+        except asyncio.CancelledError:
+            self.logger.info("Async refine and inpaint task was cancelled")
+            raise  # 重新抛出，让任务正确取消
         except Exception as e:
             self.logger.error(f"Error during async refine and inpaint: {e}")
 
@@ -914,7 +922,7 @@ class EditorController(QObject):
     @pyqtSlot(int, str)
     def update_direction(self, region_index: int, direction_text: str):
         """槽：响应UI中的方向修改"""
-        direction_map = {"自动": "auto", "横排": "h", "竖排": "v"}
+        direction_map = {"自动": "auto", "横排": "horizontal", "竖排": "vertical"}
         direction_value = direction_map.get(direction_text, "auto")
 
         old_region_data = self.model.get_region_by_index(region_index)

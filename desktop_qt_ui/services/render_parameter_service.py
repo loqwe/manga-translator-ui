@@ -153,7 +153,7 @@ class RenderParameterService:
             parameters=RenderParameters(
                 font_size=18,
                 alignment="right",
-                direction="v",
+                direction="vertical",
                 line_spacing=1.0,
                 letter_spacing=0.9,
                 fg_color=(0, 0, 0),
@@ -191,10 +191,10 @@ class RenderParameterService:
             # 判断文本方向
             aspect_ratio = width / height if height > 0 else 1.0
             if aspect_ratio > 2.0:
-                direction = "h"  # 明显的横向
+                direction = "horizontal"  # 明显的横向
                 alignment = "center"
             elif aspect_ratio < 0.5:
-                direction = "v"  # 明显的纵向
+                direction = "vertical"  # 明显的纵向
                 alignment = "right"
             else:
                 direction = "auto"  # 自动判断
@@ -405,8 +405,8 @@ class RenderParameterService:
             
             # 布局参数
             'alignment': params.alignment,
-            'direction': {'h': 'horizontal', 'v': 'vertical', 'hr': 'horizontal', 'vr': 'vertical'}.get(params.direction, 'auto'),
-            'vertical': params.direction in ['v', 'vr'], # Added vertical flag
+            'direction': {'h': 'horizontal', 'v': 'vertical', 'hr': 'horizontal', 'vr': 'vertical'}.get(params.direction, params.direction if params.direction in ['horizontal', 'vertical', 'auto'] else 'auto'),
+            'vertical': params.direction in ['v', 'vr', 'vertical'], # Added vertical flag
             'line_spacing': params.line_spacing,
             'letter_spacing': params.letter_spacing,
             

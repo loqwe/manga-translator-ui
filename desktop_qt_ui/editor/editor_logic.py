@@ -112,12 +112,20 @@ class EditorLogic(QObject):
             # 重新发射文件列表（优先发射翻译文件列表）
             self.file_list_changed.emit(self.translated_files if self.translated_files else self.source_files)
 
-            # 检查当前加载的图片是否是被移除的文件
+            # 检查当前加载的图片是否是被移除的文件（使用规范化路径比较）
             current_image_path = self.controller.model.get_source_image_path()
-            if current_image_path and (current_image_path == file_path or current_image_path == source_path):
-                # 清空编辑器
-                self.controller._clear_editor_state()
-                self.controller.model.set_image(None)
+            if current_image_path:
+                # 规范化所有路径以确保比较准确
+                norm_current = os.path.normpath(current_image_path)
+                norm_file = os.path.normpath(file_path)
+                norm_source = os.path.normpath(source_path) if source_path else None
+                norm_translated = os.path.normpath(translated_path) if translated_path else None
+                
+                # 如果当前图片是被移除的文件（可能是源文件或翻译文件）
+                if norm_current == norm_file or norm_current == norm_source or norm_current == norm_translated:
+                    # 先清空画布图片，再清空编辑器状态
+                    self.controller.model.set_image(None)
+                    self.controller._clear_editor_state()
 
     @pyqtSlot()
     def clear_list(self):
@@ -125,6 +133,11 @@ class EditorLogic(QObject):
         self.translated_files.clear()
         # 清空列表时发射空列表
         self.file_list_changed.emit([])
+        
+        # 先清空画布图片，这样后台任务会检测到图片为None而提前返回
+        self.controller.model.set_image(None)
+        # 然后清空编辑器状态（包括取消后台任务）
+        self.controller._clear_editor_state()
 
     # --- Image Loading Methods ---
 
