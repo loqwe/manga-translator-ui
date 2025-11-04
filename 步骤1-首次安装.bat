@@ -75,7 +75,9 @@ echo [DEBUG] MINICONDA_ROOT = !MINICONDA_ROOT!
 echo.
 
 REM 如果路径包含中文，给出说明并使用备用路径
-if !PATH_HAS_CHINESE! == 1 (
+echo [DEBUG] 准备执行if判断: if !PATH_HAS_CHINESE! == 1
+if "!PATH_HAS_CHINESE!"=="1" (
+    echo [DEBUG] 进入IF块 (PATH_HAS_CHINESE=1)
     echo ========================================
     echo [!] 检测到路径包含非英文字符
     echo ========================================
@@ -91,9 +93,11 @@ if !PATH_HAS_CHINESE! == 1 (
     pause
     echo.
 ) else (
+    echo [DEBUG] 进入ELSE块 (PATH_HAS_CHINESE=!PATH_HAS_CHINESE!)
     echo [DEBUG] 路径不包含中文，跳过备用路径提示
     echo.
 )
+echo [DEBUG] IF-ELSE块执行完毕
 
 echo 将安装 Miniconda 到: %MINICONDA_ROOT%
 echo.
