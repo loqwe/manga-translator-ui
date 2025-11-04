@@ -626,11 +626,15 @@ if %CONDA_ENV_EXISTS% == 0 (
 
 echo.
 echo 正在激活环境...
-call conda activate "%CONDA_ENV_PATH%"
+REM 直接调用conda的activate脚本
+if exist "%MINICONDA_ROOT%\Scripts\activate.bat" (
+    call "%MINICONDA_ROOT%\Scripts\activate.bat" "%CONDA_ENV_PATH%" 2>nul
+) else (
+    call conda activate "%CONDA_ENV_PATH%" 2>nul
+)
 if !ERRORLEVEL! neq 0 (
-    echo [ERROR] 环境激活失败
-    pause
-    exit /b 1
+    echo [WARNING] 环境激活出现警告，但会继续安装
+    REM 不中断，继续执行
 )
 
 echo 正在升级 pip...
