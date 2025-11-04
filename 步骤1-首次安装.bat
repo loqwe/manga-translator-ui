@@ -670,9 +670,14 @@ set /p clean_cache="是否清理 pip 缓存? (y/n, 默认n): "
 if /i "%clean_cache%"=="y" (
     echo.
     echo 正在清理 pip 缓存...
-    call venv\Scripts\activate.bat
+    REM 确保在conda环境中
+    call conda activate "%CONDA_ENV_PATH%" >nul 2>&1
     python -m pip cache purge >nul 2>&1
-    echo [OK] 缓存已清理
+    if %ERRORLEVEL% == 0 (
+        echo [OK] 缓存已清理
+    ) else (
+        echo [INFO] 缓存清理失败或无缓存可清理
+    )
 ) else (
     echo [INFO] 跳过缓存清理
 )
