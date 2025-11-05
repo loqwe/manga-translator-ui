@@ -198,11 +198,11 @@ if /i not "!confirm!"=="y" (
 
 echo.
 echo 获取远程更新...
-%GIT% fetch origin
+"%GIT%" fetch origin
 
 echo.
 echo 正在强制同步到远程分支...
-%GIT% reset --hard origin/main
+"%GIT%" reset --hard origin/main
 
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] 代码更新失败

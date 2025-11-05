@@ -364,7 +364,7 @@ if exist ".git" (
     echo [INFO] 检测到现有Git仓库
     
     REM 获取当前仓库地址
-    for /f "delims=" %%i in ('%GIT% config --get remote.origin.url 2^>nul') do set CURRENT_REPO=%%i
+    for /f "delims=" %%i in ('"%GIT%" config --get remote.origin.url 2^>nul') do set CURRENT_REPO=%%i
     
     if defined CURRENT_REPO (
         echo 当前仓库: !CURRENT_REPO!
@@ -393,20 +393,20 @@ if exist ".git" (
             echo.
             
             echo 获取远程更新...
-            %GIT% fetch origin
+            "%GIT%" fetch origin
             if !ERRORLEVEL! neq 0 (
                 echo [WARNING] 获取更新失败,可能是网络问题
             ) else (
                 echo 强制同步到远程主分支...
-                %GIT% reset --hard origin/main
+                "%GIT%" reset --hard origin/main
                 if !ERRORLEVEL! == 0 (
                     echo [OK] 代码已更新到最新版本
                     echo.
                     goto :create_venv
                 ) else (
                     echo [WARNING] 同步失败,尝试使用 main 分支...
-                    %GIT% checkout -f main
-                    %GIT% reset --hard origin/main
+                    "%GIT%" checkout -f main
+                    "%GIT%" reset --hard origin/main
                     if !ERRORLEVEL! == 0 (
                         echo [OK] 代码已更新到最新版本
                         echo.
@@ -507,7 +507,7 @@ REM 使用临时目录克隆
 set TEMP_DIR=manga_translator_temp_%RANDOM%
 echo 正在克隆代码到临时目录... (可能需要几分钟)
 echo.
-%GIT% clone !REPO_URL! %TEMP_DIR%
+"%GIT%" clone !REPO_URL! %TEMP_DIR%
 
 echo.
 echo [DEBUG] 检查克隆结果...
