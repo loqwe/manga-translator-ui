@@ -385,6 +385,7 @@ class MainAppLogic(QObject):
                     "renderer": "渲染器", "alignment": "对齐方式", "disable_font_border": "禁用字体边框",
                     "disable_auto_wrap": "AI断句", "font_size_offset": "字体大小偏移量", "font_size_minimum": "最小字体大小",
                     "max_font_size": "最大字体大小", "font_scale_ratio": "字体缩放比例",
+                    "stroke_width": "描边宽度比例",
                     "center_text_in_bubble": "AI断句时文本居中",
                     "optimize_line_breaks": "AI断句自动扩大文字", "check_br_and_retry": "AI断句检查",
                     "strict_smart_scaling": "AI断句自动扩大文字下不扩大文本框",

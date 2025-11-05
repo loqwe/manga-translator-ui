@@ -56,7 +56,7 @@ class RenderParameters:
     strict_smart_scaling: bool = False  # AI断句自动扩大文字下不扩大文本框
 
     # 效果参数
-    stroke_width: float = 0.2  # 描边宽度
+    stroke_width: float = 0.07  # 描边宽度（相对字体大小的比例）
     shadow_radius: float = 0.0  # 阴影半径
     shadow_strength: float = 1.0  # 阴影强度
     shadow_color: Tuple[int, int, int] = (0, 0, 0)  # 阴影颜色

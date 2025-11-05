@@ -202,6 +202,8 @@ class RenderConfig(BaseModel):
     """Automatically rotate symbols like '!!' or '??' in vertical text"""
     layout_mode: str = 'smart_scaling'
     """The layout mode to use for rendering. Options: 'default', 'smart_scaling', 'strict', 'disable_all', 'balloon_fill'"""
+    stroke_width: float = 0.07
+    """Stroke/border width ratio relative to font size. Default is 0.07 (7%). Set to 0 to disable stroke."""
     _font_color_fg = None
     _font_color_bg = None
     @property

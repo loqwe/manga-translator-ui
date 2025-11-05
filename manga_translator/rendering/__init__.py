@@ -840,6 +840,8 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
             else:
                 # --- ORIGINAL smart_scaling LOGIC for AI OFF ---
                 # This is the old logic based on diff_ratio, preserved for when AI splitting is off.
+                logger.debug(f"[SMART_SCALING DEBUG] Region has {len(region.lines)} lines in OCR result")
+                
                 if len(region.lines) > 1:
                     from shapely.ops import unary_union
                     try:
@@ -850,13 +852,16 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         union_poly = unary_union(unrotated_polygons)
                         original_area = union_poly.area
                         unrotated_base_poly = union_poly.envelope
+                        logger.debug(f"[SMART_SCALING DEBUG] Multi-line region, union area={original_area:.1f}")
                     except Exception as e:
                         logger.warning(f"Failed to compute union of polygons: {e}")
                         original_area = region.unrotated_size[0] * region.unrotated_size[1]
                         unrotated_base_poly = Polygon(region.unrotated_min_rect[0])
+                        logger.debug(f"[SMART_SCALING DEBUG] Fallback to simple area={original_area:.1f}")
                 else:
                     original_area = region.unrotated_size[0] * region.unrotated_size[1]
                     unrotated_base_poly = Polygon(region.unrotated_min_rect[0])
+                    logger.debug(f"[SMART_SCALING DEBUG] Single-line region, area={original_area:.1f}")
 
                 required_area = 0
                 required_width = 0
@@ -867,19 +872,22 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         required_width = max(widths)
                         required_height = len(lines) * (target_font_size * (1 + (config.render.line_spacing or 0.01)))
                         required_area = required_width * required_height
+                        logger.debug(f"[SMART_SCALING DEBUG] Horizontal: {len(lines)} lines, required_width={required_width:.1f}, required_height={required_height:.1f}, required_area={required_area:.1f}")
                 else: # Vertical
                     lines, heights = text_render.calc_vertical(target_font_size, region.translation, max_height=99999)
                     if heights:
                         required_height = max(heights)
                         required_width = len(lines) * (target_font_size * (1 + (config.render.line_spacing or 0.2)))
                         required_area = required_width * required_height
+                        logger.debug(f"[SMART_SCALING DEBUG] Vertical: {len(lines)} columns, required_width={required_width:.1f}, required_height={required_height:.1f}, required_area={required_area:.1f}")
 
                 dst_points = region.min_rect
                 
-                # 检查是否为单行/单列文本（不会换行）
-                # Check if this is single line/column text (won't wrap)
-                is_single_line = len(lines) == 1 if lines else False
+                # 检查是否为单行/单列文本（基于OCR检测到的文本框数量）
+                # Check if this is single line/column text based on OCR detected text boxes
+                is_single_line = len(region.lines) == 1
                 bubble_width, bubble_height = region.unrotated_size
+                logger.debug(f"[SMART_SCALING DEBUG] is_single_line={is_single_line} (based on OCR lines={len(region.lines)}), bubble_size={bubble_width:.1f}x{bubble_height:.1f}")
                 
                 # 单行文本使用独立缩放（与AI ON相同），因为不会换行
                 # Single line text uses independent scaling (same as AI ON) because it won't wrap
@@ -887,6 +895,7 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                     # 检查溢出（与AI ON算法一致）
                     width_overflow = max(0, required_width - bubble_width)
                     height_overflow = max(0, required_height - bubble_height)
+                    logger.debug(f"[SMART_SCALING DEBUG] Single-line overflow: width={width_overflow:.1f}, height={height_overflow:.1f}")
                     
                     if width_overflow > 0 or height_overflow > 0:
                         # 独立缩放宽度和高度
@@ -898,12 +907,14 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                             diff_ratio_w = width_scale_needed - 1.0
                             box_expansion_ratio_w = diff_ratio_w / 2
                             width_scale_factor = 1 + min(box_expansion_ratio_w, 1.0)
+                            logger.debug(f"[SMART_SCALING DEBUG] Width scale: needed={width_scale_needed:.3f}, diff_ratio={diff_ratio_w:.3f}, expansion={box_expansion_ratio_w:.3f}, final={width_scale_factor:.3f}")
                         
                         if height_overflow > 0:
                             height_scale_needed = required_height / bubble_height if bubble_height > 0 else 1.0
                             diff_ratio_h = height_scale_needed - 1.0
                             box_expansion_ratio_h = diff_ratio_h / 2
                             height_scale_factor = 1 + min(box_expansion_ratio_h, 1.0)
+                            logger.debug(f"[SMART_SCALING DEBUG] Height scale: needed={height_scale_needed:.3f}, diff_ratio={diff_ratio_h:.3f}, expansion={box_expansion_ratio_h:.3f}, final={height_scale_factor:.3f}")
                         
                         try:
                             scaled_unrotated_poly = affinity.scale(unrotated_base_poly, xfact=width_scale_factor, yfact=height_scale_factor, origin='center')
@@ -919,24 +930,28 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                         font_shrink_ratio = diff_ratio / 2 / (1 + diff_ratio)
                         font_scale_factor = 1 - min(font_shrink_ratio, 0.5)
                         target_font_size = int(target_font_size * font_scale_factor)
+                        logger.debug(f"[SMART_SCALING DEBUG] Font shrink: scale_needed={scale_needed:.3f}, shrink_ratio={font_shrink_ratio:.3f}, font_scale={font_scale_factor:.3f}, new_font_size={target_font_size}")
                     else:
                         # 没有溢出，可以放大字体以更好地填充
                         width_scale_factor = bubble_width / required_width
                         height_scale_factor = bubble_height / required_height
                         font_scale_factor = min(width_scale_factor, height_scale_factor)
                         target_font_size = int(target_font_size * font_scale_factor)
+                        logger.debug(f"[SMART_SCALING DEBUG] No overflow, enlarging font: width_scale={width_scale_factor:.3f}, height_scale={height_scale_factor:.3f}, font_scale={font_scale_factor:.3f}, new_font_size={target_font_size}")
                 else:
                     # 多行文本使用原来的等比缩放算法
                     # Multi-line text uses original proportional scaling algorithm
                     diff_ratio = 0
                     if original_area > 0 and required_area > 0:
                         diff_ratio = (required_area - original_area) / original_area
+                        logger.debug(f"[SMART_SCALING DEBUG] Multi-line: original_area={original_area:.1f}, required_area={required_area:.1f}, diff_ratio={diff_ratio:.3f}")
 
                     if diff_ratio > 0:
                         box_expansion_ratio = diff_ratio / 2
                         box_scale_factor = 1 + min(box_expansion_ratio, 1.0)
                         font_shrink_ratio = diff_ratio / 2 / (1 + diff_ratio)
                         font_scale_factor = 1 - min(font_shrink_ratio, 0.5)
+                        logger.debug(f"[SMART_SCALING DEBUG] Expanding box: expansion_ratio={box_expansion_ratio:.3f}, box_scale={box_scale_factor:.3f}, font_shrink_ratio={font_shrink_ratio:.3f}, font_scale={font_scale_factor:.3f}")
                         try:
                             scaled_unrotated_poly = affinity.scale(unrotated_base_poly, xfact=box_scale_factor, yfact=box_scale_factor, origin='center')
                             scaled_unrotated_points = np.array(scaled_unrotated_poly.exterior.coords[:4])
@@ -945,6 +960,7 @@ def resize_regions_to_font_size(img: np.ndarray, text_regions: List['TextBlock']
                             logger.warning(f"Failed to apply dynamic scaling: {e}")
                         target_font_size = int(target_font_size * font_scale_factor)
                     elif diff_ratio < 0:
+                        logger.debug(f"[SMART_SCALING DEBUG] Shrinking: diff_ratio={diff_ratio:.3f}")
                         try:
                             area_ratio = original_area / required_area
                             font_scale_factor = np.sqrt(area_ratio)

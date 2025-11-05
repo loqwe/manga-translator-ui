@@ -88,6 +88,7 @@ class RenderSettings(BaseModel):
     optimize_line_breaks: bool = False
     check_br_and_retry: bool = False
     strict_smart_scaling: bool = False
+    stroke_width: float = 0.07
 
 class UpscaleSettings(BaseModel):
     upscaler: str = "esrgan"

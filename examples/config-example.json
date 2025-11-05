@@ -39,7 +39,7 @@
     "use_yolo_obb": true,
     "yolo_obb_conf": 0.4,
     "yolo_obb_iou": 0.6,
-    "yolo_obb_overlap_threshold": 1e-05
+    "yolo_obb_overlap_threshold": "0.1"
   },
   "inpainter": {
     "inpainter": "lama_large",
@@ -70,7 +70,8 @@
     "center_text_in_bubble": false,
     "optimize_line_breaks": false,
     "check_br_and_retry": false,
-    "strict_smart_scaling": false
+    "strict_smart_scaling": false,
+    "stroke_width": "0.07"
   },
   "upscale": {
     "upscaler": "realcugan",
@@ -100,7 +101,7 @@
     "template": false,
     "prep_manual": false,
     "save_quality": 100,
-    "batch_size": 1,
+    "batch_size": "3",
     "batch_concurrent": false,
     "generate_and_export": false,
     "colorize_only": false,
