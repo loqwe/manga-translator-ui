@@ -77,79 +77,10 @@ class MainAppLogic(QObject):
         self.logger.info("主页面应用业务逻辑初始化完成")
 
 
-    def _create_folder_source_file(self, output_folder: str, source_folder: str):
-        """
-        在输出文件夹内创建源路径文件，只记录原始文件夹的完整路径
-        
-        Args:
-            output_folder: 输出文件夹路径
-            source_folder: 源文件夹完整路径
-        """
-        try:
-            # 创建源路径文件
-            source_file_path = os.path.join(output_folder, '_source_path.txt')
-            
-            # 写入原始文件夹的完整路径
-            with open(source_file_path, 'w', encoding='utf-8') as f:
-                f.write(os.path.normpath(source_folder))
-            
-            self.logger.info(f"✅ 已创建源路径文件: {source_file_path}")
-            
-        except Exception as e:
-            self.logger.error(f"创建源路径文件失败: {e}")
-
-    def _create_source_files_for_all_folders(self, output_folder: str):
-        """
-        为所有已处理的文件夹创建源路径文件（批量处理时调用）
-        
-        Args:
-            output_folder: 输出根目录
-        """
-        try:
-            # 收集所有唯一的源文件夹
-            source_folders = set()
-            for source_file, source_folder in self.file_to_folder_map.items():
-                if source_folder:
-                    source_folders.add(source_folder)
-            
-            # 为每个文件夹创建源路径文件
-            for source_folder in source_folders:
-                folder_output_root = os.path.join(output_folder, os.path.basename(source_folder))
-                if os.path.exists(folder_output_root):
-                    source_file_path = os.path.join(folder_output_root, '_source_path.txt')
-                    if not os.path.exists(source_file_path):
-                        self._create_folder_source_file(folder_output_root, source_folder)
-            
-            if source_folders:
-                self.logger.info(f"✅ 已为 {len(source_folders)} 个文件夹创建源路径文件")
-                
-        except Exception as e:
-            self.logger.error(f"批量创建源路径文件失败: {e}")
-
-    @staticmethod
-    def get_source_folder_from_output(output_folder: str) -> Optional[str]:
-        """
-        从输出文件夹读取原始源路径（读取"出生证明"）
-        
-        Args:
-            output_folder: 输出文件夹路径
-            
-        Returns:
-            原始文件夹的完整路径，如果文件不存在返回 None
-        """
-        source_file = os.path.join(output_folder, '_source_path.txt')
-        if os.path.exists(source_file):
-            try:
-                with open(source_file, 'r', encoding='utf-8') as f:
-                    return f.read().strip()
-            except Exception:
-                return None
-        return None
-
     @pyqtSlot(dict)
     def on_file_completed(self, result):
         """处理单个文件处理完成的信号并保存"""
-        if not result.get('success'):
+        if not result.get('success') or not result.get('image_data'):
             self.logger.error(f"Skipping save for failed item: {result.get('original_path')}")
             return
 
@@ -169,28 +100,6 @@ class MainAppLogic(QObject):
 
             # 检查文件是否来自文件夹
             source_folder = self.file_to_folder_map.get(original_path)
-
-            # ✅ 检查是否是导出原文模式（只生成txt，不保存图片）
-            # 使用config.dict()获取配置字典，与代码库其他部分保持一致
-            config_dict = config.dict() if hasattr(config, 'dict') else {}
-            cli_config = config_dict.get('cli', {})
-            is_template_mode = cli_config.get('template', False) and cli_config.get('save_text', False)
-            has_image_data = result.get('image_data') is not None
-
-            # 如果是导出原文模式且没有图片数据，只创建源路径文件，不保存图片
-            if is_template_mode and not has_image_data:
-                if source_folder:
-                    folder_output_root = os.path.join(output_folder, os.path.basename(source_folder))
-                    source_file_path = os.path.join(folder_output_root, '_source_path.txt')
-                    if not os.path.exists(source_file_path):
-                        self._create_folder_source_file(folder_output_root, source_folder)
-                        self.logger.info(f"导出原文模式：已为文件夹创建源路径文件")
-                return
-
-            # 正常模式：需要图片数据才能保存
-            if not has_image_data:
-                self.logger.error(f"Skipping save for item without image data: {result.get('original_path')}")
-                return
 
             if source_folder:
                 # 文件来自文件夹，保持相对路径结构
@@ -218,13 +127,6 @@ class MainAppLogic(QObject):
             final_output_path = os.path.join(final_output_folder, output_filename)
 
             os.makedirs(final_output_folder, exist_ok=True)
-
-            # ✅ 新增：如果是文件夹的第一个文件，创建源路径文件
-            if source_folder:
-                folder_output_root = os.path.join(output_folder, os.path.basename(source_folder))
-                source_file_path = os.path.join(folder_output_root, '_source_path.txt')
-                if not os.path.exists(source_file_path):
-                    self._create_folder_source_file(folder_output_root, source_folder)
 
             save_kwargs = {}
             image_to_save = result['image_data']
@@ -506,7 +408,11 @@ class MainAppLogic(QObject):
                     "overwrite": "覆盖已存在文件", "skip_no_text": "跳过无文本图像", "use_mtpe": "启用后期编辑(MTPE)",
                     "save_text": "图片可编辑", "load_text": "导入翻译", "template": "导出原文",
                     "prep_manual": "为手动排版做准备", "save_quality": "图像保存质量", "batch_size": "批量大小",
-                    "batch_concurrent": "并发批量处理", "generate_and_export": "导出翻译", "high_quality_batch_size": "高质量批次大小",
+                    "batch_concurrent": "并发批量处理", "pipeline_mode": "流水线并行模式",
+                    "pipeline_line1_concurrency": "流水线并发-线1(检测+OCR)",
+                    "pipeline_line2_concurrency": "流水线并发-线2(翻译+渲染)",
+                    "pipeline_line3_concurrency": "流水线并发-线3(超分)",
+                    "generate_and_export": "导出翻译", "high_quality_batch_size": "高质量批次大小",
                     "last_output_path": "最后输出路径", "line_spacing": "行间距", "font_size": "字体大小",
                     "YOUDAO_APP_KEY": "有道翻译应用ID", "YOUDAO_SECRET_KEY": "有道翻译应用秘钥",
                     "BAIDU_APP_ID": "百度翻译 AppID", "BAIDU_SECRET_KEY": "百度翻译密钥",
@@ -820,9 +726,6 @@ class MainAppLogic(QObject):
                 # In batch mode, the saved_files_count is the length of this list
                 self.saved_files_count = len(saved_files)
 
-                # ✅ 新增：为批量处理中的文件夹创建源路径文件
-                self._create_source_files_for_all_folders(output_folder)
-
             except Exception as e:
                 self.logger.error(f"处理批量任务结果时发生严重错误: {e}")
 
@@ -832,10 +735,6 @@ class MainAppLogic(QObject):
         # 对于顺序处理模式，使用累积的 saved_files_list
         if not saved_files and self.saved_files_list:
             saved_files = self.saved_files_list.copy()
-            # ✅ 为顺序处理中的文件夹创建源路径文件
-            output_folder = self.config_service.get_config().app.last_output_path
-            if output_folder:
-                self._create_source_files_for_all_folders(output_folder)
         
         try:
             print("--- DEBUG: on_task_finished step 1: Setting translating state to False.")
