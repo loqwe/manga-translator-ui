@@ -2704,7 +2704,6 @@ class MangaTranslator:
 
                 image_to_save.save(final_output_path, quality=self.save_quality)
                 logger.info(f"  -> ✅ [PIPELINE] Saved successfully: {os.path.basename(final_output_path)}")
-                self._update_translation_map(file_path, final_output_path)
                 
         except Exception as save_err:
             logger.error(f"Error saving pipeline result for {os.path.basename(ctx.image_name)}: {save_err}")
@@ -2806,7 +2805,6 @@ class MangaTranslator:
 
                             image_to_save.save(final_output_path, quality=self.save_quality)
                             logger.info(f"  -> ✅ [SEQUENTIAL] Saved successfully: {os.path.basename(final_output_path)}")
-                            self._update_translation_map(file_path, final_output_path)
 
                     except Exception as save_err:
                         logger.error(f"Error saving sequential result for {os.path.basename(ctx.image_name)}: {save_err}")
@@ -2893,7 +2891,6 @@ class MangaTranslator:
 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [LOAD_TEXT] Saved successfully: {os.path.basename(final_output_path)}")
-                                self._update_translation_map(file_path, final_output_path)
                             
                             # 标记成功
                             ctx.success = True
@@ -3025,7 +3022,6 @@ class MangaTranslator:
                                 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [BATCH] Saved successfully: {os.path.basename(final_output_path)}")
-                                self._update_translation_map(file_path, final_output_path)
 
                         except Exception as save_err:
                             logger.error(f"Error saving standard batch result for {os.path.basename(ctx.image_name)}: {save_err}")
@@ -4278,33 +4274,6 @@ class MangaTranslator:
         
         return region.translation
 
-    def _update_translation_map(self, source_path: str, translated_path: str):
-        """在输出目录创建或更新 translation_map.json"""
-        try:
-            output_dir = os.path.dirname(translated_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-            
-            # 规范化路径以确保一致性
-            source_path_norm = os.path.normpath(source_path)
-            translated_path_norm = os.path.normpath(translated_path)
-
-            translation_map = {}
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    try:
-                        translation_map = json.load(f)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Could not decode {map_path}, creating a new one.")
-            
-            # 使用翻译后的路径作为键，确保唯一性
-            translation_map[translated_path_norm] = source_path_norm
-            
-            with open(map_path, 'w', encoding='utf-8') as f:
-                json.dump(translation_map, f, ensure_ascii=False, indent=4)
-
-        except Exception as e:
-            logger.error(f"Failed to update translation map: {e}")
-
     async def _translate_batch_high_quality(self, images_with_configs: List[tuple], save_info: dict = None) -> List[Context]:
         """
         高质量翻译模式：按批次滚动处理，每批独立完成预处理、翻译、渲染全流程。
@@ -4532,8 +4501,6 @@ class MangaTranslator:
                                 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [HQ] Saved successfully: {os.path.basename(final_output_path)}")
-                                # 更新翻译映射文件
-                                self._update_translation_map(file_path, final_output_path)
 
                         except Exception as save_err:
                             logger.error(f"Error saving high-quality result for {os.path.basename(ctx.image_name)}: {save_err}")

@@ -306,7 +306,7 @@ class EditorController(QObject):
 
     def _is_translated_image(self, image_path: str) -> bool:
         """
-        检查图片是否是翻译后的图片（通过translation_map.json）
+        检查图片是否是翻译后的图片（通过_source_path.txt文件）
 
         Args:
             image_path: 图片路径
@@ -315,30 +315,19 @@ class EditorController(QObject):
             True if 是翻译后的图片, False otherwise
         """
         try:
-            import json
-            norm_path = os.path.normpath(image_path)
-            output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
+            output_dir = os.path.dirname(image_path)
+            source_path_file = os.path.join(output_dir, '_source_path.txt')
 
             self.logger.info(f"Checking if translated image: {image_path}")
-            self.logger.info(f"Normalized path: {norm_path}")
-            self.logger.info(f"Looking for translation_map.json at: {map_path}")
+            self.logger.info(f"Looking for _source_path.txt at: {source_path_file}")
 
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    translation_map = json.load(f)
-                self.logger.info(f"Found translation_map.json with {len(translation_map)} entries")
-                self.logger.info(f"Translation map keys: {list(translation_map.keys())[:3]}...")  # 只显示前3个
-                # 如果当前路径是translation_map的key，说明是翻译后的图片
-                if norm_path in translation_map:
-                    self.logger.info(f"✓ Found translation mapping for: {image_path}")
-                    return True
-                else:
-                    self.logger.info(f"✗ No translation mapping found for: {norm_path}")
+            if os.path.exists(source_path_file):
+                self.logger.info(f"✓ Found _source_path.txt, this is a translated image")
+                return True
             else:
-                self.logger.info(f"✗ translation_map.json not found at: {map_path}")
+                self.logger.info(f"✗ _source_path.txt not found, this is a source image")
         except Exception as e:
-            self.logger.error(f"Error checking translation map: {e}")
+            self.logger.error(f"Error checking _source_path.txt: {e}")
 
         return False
 
@@ -375,7 +364,7 @@ class EditorController(QObject):
             image_resource = self.resource_manager.load_image(image_path)
             image = image_resource.image
 
-            # 检查是否是翻译后的图片（通过translation_map.json）
+            # 检查是否是翻译后的图片（通过_source_path.txt文件）
             is_translated_image = self._is_translated_image(image_path)
 
             if is_translated_image:
@@ -795,7 +784,6 @@ class EditorController(QObject):
             try:
                 inpainter_key = Inpainter(inpainter_name)
             except ValueError:
-                self.logger.warning(f"Unknown inpainter model: {inpainter_name}, defaulting to lama_large")
                 inpainter_key = Inpainter.lama_large
 
             inpainting_size = inpainter_config_model.inpainting_size
@@ -1535,9 +1523,6 @@ class EditorController(QObject):
                 base_name = os.path.splitext(os.path.basename(source_path))[0]
                 # 获取输出格式
                 output_format = getattr(config.cli, 'format', '') if hasattr(config, 'cli') else ''
-                if output_format == "不指定":
-                    output_format = None
-
                 if output_format and output_format.strip():
                     output_filename = f"{base_name}.{output_format.lower()}"
                 else:
@@ -1660,25 +1645,22 @@ class EditorController(QObject):
             self.logger.info("Current image is already a source file, no need to switch")
             return
 
-        # 从translation_map.json中查找原图路径
+        # 从_source_path.txt中查找原图路径
         try:
-            import json
-            norm_path = os.path.normpath(current_path)
-            output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
+            output_dir = os.path.dirname(current_path)
+            source_path_file = os.path.join(output_dir, '_source_path.txt')
 
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    translation_map = json.load(f)
+            if os.path.exists(source_path_file):
+                with open(source_path_file, 'r', encoding='utf-8') as f:
+                    source_path = f.read().strip()
 
-                source_path = translation_map.get(norm_path)
                 if source_path and os.path.exists(source_path):
                     self.logger.info(f"Loading source file for editing: {source_path}")
                     self.load_image_and_regions(source_path)
                 else:
                     self.logger.warning(f"Source file not found: {source_path}")
             else:
-                self.logger.warning(f"translation_map.json not found at: {map_path}")
+                self.logger.warning(f"_source_path.txt not found at: {source_path_file}")
         except Exception as e:
             self.logger.error(f"Error loading source file: {e}")
 

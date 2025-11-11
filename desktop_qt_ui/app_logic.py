@@ -76,11 +76,81 @@ class MainAppLogic(QObject):
         self.app_config = AppConfig()
         self.logger.info("主页面应用业务逻辑初始化完成")
 
+    def _create_folder_source_file(self, output_folder: str, source_folder: str):
+        """
+        在输出文件夹内创建源路径文件，只记录原始文件夹的完整路径
+        
+        Args:
+            output_folder: 输出文件夹路径
+            source_folder: 源文件夹完整路径
+        """
+        try:
+            # 创建源路径文件
+            source_file_path = os.path.join(output_folder, '_source_path.txt')
+            
+            # 写入原始文件夹的完整路径
+            with open(source_file_path, 'w', encoding='utf-8') as f:
+                f.write(os.path.normpath(source_folder))
+            
+            self.logger.info(f"✅ 已创建源路径文件: {source_file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"创建源路径文件失败: {e}")
+
+    def _create_source_files_for_all_folders(self, output_folder: str):
+        """
+        为所有已处理的文件夹创建源路径文件（在任务开始前调用）
+        
+        Args:
+            output_folder: 输出根目录
+        """
+        try:
+            # 收集所有唯一的源文件夹
+            source_folders = set()
+            for source_file, source_folder in self.file_to_folder_map.items():
+                if source_folder:
+                    source_folders.add(source_folder)
+            
+            # 为每个文件夹创建输出目录和源路径文件
+            for source_folder in source_folders:
+                folder_output_root = os.path.join(output_folder, os.path.basename(source_folder))
+                # 提前创建输出文件夹
+                os.makedirs(folder_output_root, exist_ok=True)
+                
+                source_file_path = os.path.join(folder_output_root, '_source_path.txt')
+                if not os.path.exists(source_file_path):
+                    self._create_folder_source_file(folder_output_root, source_folder)
+            
+            if source_folders:
+                self.logger.info(f"✅ 已为 {len(source_folders)} 个文件夹创建源路径文件")
+                
+        except Exception as e:
+            self.logger.error(f"批量创建源路径文件失败: {e}")
+
+    @staticmethod
+    def get_source_folder_from_output(output_folder: str) -> Optional[str]:
+        """
+        从输出文件夹读取原始源路径（读取"出生证明"）
+        
+        Args:
+            output_folder: 输出文件夹路径
+            
+        Returns:
+            原始文件夹的完整路径，如果文件不存在返回 None
+        """
+        source_file = os.path.join(output_folder, '_source_path.txt')
+        if os.path.exists(source_file):
+            try:
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    return f.read().strip()
+            except Exception:
+                return None
+        return None
 
     @pyqtSlot(dict)
     def on_file_completed(self, result):
         """处理单个文件处理完成的信号并保存"""
-        if not result.get('success') or not result.get('image_data'):
+        if not result.get('success'):
             self.logger.error(f"Skipping save for failed item: {result.get('original_path')}")
             return
 
@@ -100,6 +170,22 @@ class MainAppLogic(QObject):
 
             # 检查文件是否来自文件夹
             source_folder = self.file_to_folder_map.get(original_path)
+
+            # ✅ 检查是否是导出原文模式（只生成txt，不保存图片）
+            # 使用config.dict()获取配置字典，与代码库其他部分保持一致
+            config_dict = config.dict() if hasattr(config, 'dict') else {}
+            cli_config = config_dict.get('cli', {})
+            is_template_mode = cli_config.get('template', False) and cli_config.get('save_text', False)
+            has_image_data = result.get('image_data') is not None
+
+            # 如果是导出原文模式且没有图片数据，不保存图片（源路径文件已在任务开始前创建）
+            if is_template_mode and not has_image_data:
+                return
+
+            # 正常模式：需要图片数据才能保存
+            if not has_image_data:
+                self.logger.error(f"Skipping save for item without image data: {result.get('original_path')}")
+                return
 
             if source_folder:
                 # 文件来自文件夹，保持相对路径结构
@@ -141,9 +227,6 @@ class MainAppLogic(QObject):
 
             image_to_save.save(final_output_path, **save_kwargs)
 
-            # 更新translation_map.json
-            self._update_translation_map(original_path, final_output_path)
-
             self.saved_files_count += 1
             self.saved_files_list.append(final_output_path)  # 收集保存的文件路径
             self.logger.info(f"成功保存文件: {final_output_path}")
@@ -151,35 +234,6 @@ class MainAppLogic(QObject):
 
         except Exception as e:
             self.logger.error(f"保存文件 {result['original_path']} 时出错: {e}")
-
-    def _update_translation_map(self, source_path: str, translated_path: str):
-        """在输出目录创建或更新 translation_map.json"""
-        try:
-            import json
-            output_dir = os.path.dirname(translated_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-
-            # 规范化路径以确保一致性
-            source_path_norm = os.path.normpath(source_path)
-            translated_path_norm = os.path.normpath(translated_path)
-
-            translation_map = {}
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    try:
-                        translation_map = json.load(f)
-                    except json.JSONDecodeError:
-                        self.logger.warning(f"Could not decode {map_path}, creating a new one.")
-
-            # 使用翻译后的路径作为键，确保唯一性
-            translation_map[translated_path_norm] = source_path_norm
-
-            with open(map_path, 'w', encoding='utf-8') as f:
-                json.dump(translation_map, f, ensure_ascii=False, indent=4)
-
-            self.logger.info(f"Updated translation_map.json: {translated_path_norm} -> {source_path_norm}")
-        except Exception as e:
-            self.logger.error(f"Failed to update translation_map.json: {e}")
 
     @pyqtSlot(str)
     def on_worker_log(self, message):
@@ -631,6 +685,11 @@ class MainAppLogic(QObject):
 
         self.saved_files_count = 0
         self.saved_files_list = []  # 重置保存文件列表
+        
+        # ✅ 提前创建所有文件夹的源路径文件（在任务开始前）
+        self.logger.info("正在为源文件夹创建出生证明...")
+        self._create_source_files_for_all_folders(output_path)
+        
         self.thread = QThread()
         self.worker = TranslationWorker(
             files=files_to_process,
