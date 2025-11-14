@@ -702,11 +702,20 @@ REM 清理可能存在的旧环境注册信息
 echo 清理conda环境列表...
 call conda env remove -n "%CONDA_ENV_NAME%" -y >nul 2>&1
 
+REM 清理可能存在的损坏环境目录（环境存在但未注册的情况）
+REM 获取conda的envs目录
+for /f "delims=" %%i in ('conda info --base 2^>nul') do set "CONDA_BASE=%%i"
+if exist "%CONDA_BASE%\envs\%CONDA_ENV_NAME%" (
+    echo 发现未注册的环境目录，正在清理...
+    rmdir /s /q "%CONDA_BASE%\envs\%CONDA_ENV_NAME%" 2>nul
+)
+
 REM 接受Conda服务条款（避免交互式提示）
 call conda config --set channel_priority flexible >nul 2>&1
 call conda tos accept >nul 2>&1
 
 REM 创建命名环境
+echo 正在创建环境: %CONDA_ENV_NAME%
 call conda create -n "%CONDA_ENV_NAME%" python=3.12 -y
 if !ERRORLEVEL! neq 0 (
     echo [ERROR] Conda环境创建失败
