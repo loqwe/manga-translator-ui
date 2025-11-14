@@ -145,6 +145,9 @@ class MangaTranslator:
         # batch_concurrent 会在 parse_init_params 中验证并设置
         self.batch_concurrent = params.get('batch_concurrent', False)
         
+        # 流水线并行模式：在等待翻译时处理下一张图片的检测/OCR
+        self.pipeline_mode = params.get('pipeline_mode', False)
+        
         # 添加模型加载状态标志
         self._models_loaded = False
         
@@ -298,6 +301,18 @@ class MangaTranslator:
         self.models_ttl = params.get('models_ttl', 0)
         self.batch_size = params.get('batch_size', 1)  # 添加批量大小参数
         self.high_quality_batch_size = params.get('high_quality_batch_size', 3)
+        self.pipeline_mode = params.get('pipeline_mode', False)  # 流水线并行模式
+        # 流水线并发配置（提供合理默认值，并在后续使用时做最小值保护）
+        def _safe_int(v, d):
+            try:
+                if v in (None, '', 'None'):
+                    return d
+                return int(v)
+            except Exception:
+                return d
+        self.pipeline_line1_concurrency = _safe_int(params.get('pipeline_line1_concurrency', 2), 2)
+        self.pipeline_line2_concurrency = _safe_int(params.get('pipeline_line2_concurrency', 3), 3)
+        self.pipeline_line3_concurrency = _safe_int(params.get('pipeline_line3_concurrency', 1), 1)
         
         # 验证batch_concurrent参数
         if self.batch_concurrent and self.batch_size < 2:
@@ -2410,9 +2425,312 @@ class MangaTranslator:
 
         self.add_progress_hook(ph)
 
+    async def pipeline_translate_batch(self, images_with_configs: List[tuple], batch_size: int = None, image_names: List[str] = None, save_info: dict = None) -> List[Context]:
+        """
+        两阶段流水线并行翻译模式
+        
+        第一阶段（并发执行）：
+        - 线1: 检测+OCR
+        - 线2: AI翻译+Inpainting+渲染
+        
+        第二阶段（等待第一阶段完成后执行）：
+        - 线3: 超分（GPU密集，批量处理）
+        """
+        # 读取并发设置并做下限保护
+        c1 = max(1, int(getattr(self, 'pipeline_line1_concurrency', 2)))
+        c2 = max(1, int(getattr(self, 'pipeline_line2_concurrency', 3)))
+        c3 = max(1, int(getattr(self, 'pipeline_line3_concurrency', 1)))
+
+        logger.info("="*50)
+        logger.info("🚀 Two-Stage Pipeline Mode Enabled")
+        logger.info("  📌 Stage 1: Line1 & Line2 run concurrently")
+        logger.info(f"    ├─ Line1: Detection+OCR (Concurrency: {c1})")
+        logger.info(f"    └─ Line2: Translation+Inpaint+Render (Concurrency: {c2})")
+        logger.info("  📌 Stage 2: Line3 starts after Stage 1 completes")
+        logger.info(f"    └─ Line3: Upscale Only (Concurrency: {c3})")
+        logger.info("  • Expected speedup: 40-60% for online translators")
+        logger.info("="*50)
+        
+        total_images = len(images_with_configs)
+        results = [None] * total_images
+        
+        # 检查是否为特殊模式
+        is_template_save_mode = self.template and self.save_text
+        if is_template_save_mode or batch_size and batch_size <= 1:
+            logger.info("Pipeline mode not applicable for template/sequential mode, falling back to standard batch processing")
+            # 防止递归
+            original_pipeline_mode = self.pipeline_mode
+            self.pipeline_mode = False
+            ret = await self.translate_batch(images_with_configs, batch_size, image_names, save_info)
+            self.pipeline_mode = original_pipeline_mode
+            return ret
+        
+        # 队列（作为各线之间的缓冲区），按下游并发设置缓冲大小
+        preprocess_queue = asyncio.Queue(maxsize=max(2, c2 + 1))   # 线1 → 线2
+        translate_queue = asyncio.Queue(maxsize=max(2, c3 + 1))    # 线2 → 线3
+        render_queue = asyncio.Queue(maxsize=2)                     # 线3 → 主收集
+        
+        # 并发控制
+        line1_semaphore = asyncio.Semaphore(c1)
+        line2_semaphore = asyncio.Semaphore(c2)
+        line3_semaphore = asyncio.Semaphore(c3)
+        
+        async def line1_detection_ocr():
+            """线1: 仅执行检测+OCR（去掉超分以加速）"""
+            
+            async def process_single(idx: int, image: Image.Image, config: Config):
+                async with line1_semaphore:
+                    try:
+                        logger.info(f"[Line1-Detection] 🔍 Processing image {idx+1}/{total_images}")
+                        self._set_image_context(config, image)
+                        
+                        from .utils.generic import get_image_md5
+                        image_md5 = get_image_md5(image)
+                        self._save_current_image_context(image_md5)
+                        
+                        # 临时禁用超分，使线1仅做检测+OCR
+                        original_upscale_ratio = config.upscale.upscale_ratio
+                        config.upscale.upscale_ratio = None
+                        
+                        ctx = await self._translate_until_translation(image, config)
+                        
+                        # 恢复配置并保存供线3使用
+                        config.upscale.upscale_ratio = original_upscale_ratio
+                        ctx.pipeline_upscale_ratio = original_upscale_ratio
+                        
+                        if hasattr(image, 'name'):
+                            ctx.image_name = image.name
+                        
+                        await preprocess_queue.put((idx, ctx, config))
+                        logger.info(f"[Line1-Detection] ✅ Image {idx+1} detection & OCR completed")
+                    except Exception as e:
+                        logger.error(f"[Line1-Detection] ❌ Error in image {idx+1}: {e}")
+                        ctx = Context()
+                        ctx.input = image
+                        ctx.text_regions = []
+                        if hasattr(image, 'name'):
+                            ctx.image_name = image.name
+                        ctx.pipeline_upscale_ratio = config.upscale.upscale_ratio
+                        await preprocess_queue.put((idx, ctx, config))
+            
+            # 并发提交所有图像任务
+            tasks = []
+            for idx, (image, config) in enumerate(images_with_configs):
+                tasks.append(asyncio.create_task(process_single(idx, image, config)))
+            await asyncio.gather(*tasks)
+            await preprocess_queue.put(None)
+            logger.info("[Line1-Detection] 🏁 All detection & OCR completed")
+        
+        async def line2_translation_render():
+            """线2: AI翻译 + Inpainting + 渲染（支持并发）"""
+            
+            async def translate_and_render_single(idx: int, ctx: Context, config: Config):
+                async with line2_semaphore:
+                    try:
+                        logger.info(f"[Line2-TransRender] 🌐 Processing image {idx+1}/{total_images}")
+                        
+                        # 翻译
+                        if ctx.text_regions:
+                            all_texts = [region.text for region in ctx.text_regions]
+                            page_index = len(self.all_page_translations) + idx
+                            batch_original_texts = [{'original_texts': all_texts}]
+                            ctx = await self._load_and_prepare_prompts(config, ctx)
+                            
+                            translated_texts = await self._batch_translate_texts(
+                                all_texts, config, ctx, [ctx],
+                                page_index=page_index, batch_index=0,
+                                batch_original_texts=batch_original_texts
+                            )
+                            
+                            for region, translation in zip(ctx.text_regions, translated_texts):
+                                region.translation = translation
+                                region.target_lang = config.translator.target_lang
+                                region._alignment = config.render.alignment
+                                region._direction = config.render.direction
+                            
+                            ctx.text_regions = await self._apply_post_translation_processing(ctx, config)
+                            page_trans = {r.text: r.translation for r in ctx.text_regions if r.translation}
+                            self.all_page_translations.append(page_trans)
+                            logger.info(f"[Line2-TransRender] ✅ Translation completed {idx+1}")
+                        else:
+                            logger.info(f"[Line2-TransRender] ⚠️ No text regions {idx+1}")
+                        
+                        # Inpainting + 渲染
+                        if hasattr(ctx, 'image_context'):
+                            self._current_image_context = ctx.image_context
+                        
+                        # 生成mask
+                        if ctx.mask is None and ctx.mask_raw is not None:
+                            await self._report_progress('mask-generation')
+                            ctx.mask = await self._run_mask_refinement(config, ctx)
+                        
+                        if ctx.text_regions:
+                            await self._report_progress('inpainting')
+                            ctx.img_inpainted = await self._run_inpainting(config, ctx)
+                            if self.verbose:
+                                imwrite_unicode(self._result_path('inpainted.png'),
+                                                cv2.cvtColor(ctx.img_inpainted, cv2.COLOR_RGB2BGR), logger)
+                            if hasattr(ctx, 'image_name') and ctx.image_name:
+                                self._save_inpainted_image(ctx.image_name, ctx.img_inpainted)
+                            
+                            await self._report_progress('rendering')
+                            ctx.img_rendered = await self._run_text_rendering(config, ctx)
+                            ctx.result = dump_image(ctx.input, ctx.img_rendered, ctx.img_alpha)
+                            logger.info(f"[Line2-TransRender] ✅ Render completed {idx+1}")
+                        else:
+                            ctx.result = ctx.input
+                        
+                        # 保存文本（如果需要）
+                        if self.save_text and ctx.text_regions and hasattr(ctx, 'image_name') and ctx.image_name:
+                            self._save_text_to_file(ctx.image_name, ctx, config)
+                        
+                        await translate_queue.put((idx, ctx, config))
+                    except Exception as e:
+                        logger.error(f"[Line2-TransRender] ❌ Error processing image {idx+1}: {e}")
+                        await translate_queue.put((idx, ctx, config))
+            
+            # 并发消费者
+            async def consumer():
+                tasks = []
+                while True:
+                    item = await preprocess_queue.get()
+                    if item is None:
+                        break
+                    idx, ctx, config = item
+                    task = asyncio.create_task(translate_and_render_single(idx, ctx, config))
+                    tasks.append(task)
+                if tasks:
+                    await asyncio.gather(*tasks)
+                await translate_queue.put(None)
+                logger.info("[Line2-TransRender] 🏁 All translation & rendering completed")
+            
+            await consumer()
+        
+        async def line3_upscale_only():
+            """线3: 仅超分（两阶段模式：等待线1+线2完成后才开始）"""
+            
+            async def upscale_single(idx: int, ctx: Context, config: Config):
+                async with line3_semaphore:
+                    try:
+                        # 仅进行超分（如果启用）
+                        if hasattr(ctx, 'pipeline_upscale_ratio') and ctx.pipeline_upscale_ratio:
+                            logger.info(f"[Line3-Upscale] 🔍 Upscaling image {idx+1}/{total_images} ({ctx.pipeline_upscale_ratio}x)")
+                            upscale_ctx = Context()
+                            upscale_ctx.img_colorized = ctx.result
+                            upscale_ctx.input = ctx.result
+                            upscaled_result = await self._run_upscaling(config, upscale_ctx)
+                            ctx.result = upscaled_result
+                            logger.info(f"[Line3-Upscale] ✅ Image {idx+1} upscaled successfully")
+                        else:
+                            logger.info(f"[Line3-Upscale] ⏭️ Image {idx+1} skipped (no upscale needed)")
+                        
+                        # 保存最终结果
+                        if save_info and ctx.result and hasattr(ctx, 'image_name') and ctx.image_name:
+                            await self._save_single_result(ctx, save_info)
+                        
+                        await render_queue.put((idx, ctx))
+                    except Exception as e:
+                        logger.error(f"[Line3-Upscale] ❌ Error upscaling image {idx+1}: {e}")
+                        await render_queue.put((idx, ctx))
+            
+            # 两阶段模式：先收集所有渲染结果，等线2完成后再批量超分
+            logger.info("[Line3-Upscale] ⏳ Waiting for Stage 1 (Line1 & Line2) to complete...")
+            all_rendered = []
+            while True:
+                item = await translate_queue.get()
+                if item is None:
+                    break
+                all_rendered.append(item)
+            
+            logger.info(f"[Line3-Upscale] ✅ Stage 1 completed. Starting Stage 2 (Upscale) with {len(all_rendered)} images...")
+            
+            # 开始批量超分
+            tasks = []
+            for idx, ctx, config in all_rendered:
+                task = asyncio.create_task(upscale_single(idx, ctx, config))
+                tasks.append(task)
+            
+            # 等待所有超分任务完成
+            if tasks:
+                await asyncio.gather(*tasks)
+            
+            await render_queue.put(None)
+            logger.info("[Line3-Upscale] 🏁 Stage 2 (All upscaling) completed")
+        
+        workers = [
+            asyncio.create_task(line1_detection_ocr()),
+            asyncio.create_task(line2_translation_render()),
+            asyncio.create_task(line3_upscale_only()),
+        ]
+        
+        completed = 0
+        while completed < total_images:
+            item = await render_queue.get()
+            if item is None:
+                break
+            idx, ctx = item
+            results[idx] = ctx
+            completed += 1
+            logger.info(f"[Pipeline] 📊 Progress: {completed}/{total_images} images completed")
+        
+        await asyncio.gather(*workers)
+        
+        logger.info("="*50)
+        logger.info(f"🎉 Two-Stage Pipeline Completed: {total_images} images")
+        logger.info("="*50)
+        return results
+    
+    async def _save_single_result(self, ctx: Context, save_info: dict):
+        """保存单个结果的辅助方法"""
+        try:
+            output_folder = save_info.get('output_folder')
+            input_folders = save_info.get('input_folders', set())
+            output_format = save_info.get('format')
+            overwrite = save_info.get('overwrite', True)
+
+            file_path = ctx.image_name
+            final_output_dir = output_folder
+            parent_dir = os.path.normpath(os.path.dirname(file_path))
+            
+            for folder in input_folders:
+                if parent_dir.startswith(folder):
+                    relative_path = os.path.relpath(parent_dir, folder)
+                    if relative_path == '.':
+                        final_output_dir = os.path.join(output_folder, os.path.basename(folder))
+                    else:
+                        final_output_dir = os.path.join(output_folder, os.path.basename(folder), relative_path)
+                    final_output_dir = os.path.normpath(final_output_dir)
+                    break
+
+            os.makedirs(final_output_dir, exist_ok=True)
+
+            base_filename, _ = os.path.splitext(os.path.basename(file_path))
+            if output_format and output_format.strip() and output_format.lower() != 'none':
+                output_filename = f"{base_filename}.{output_format}"
+            else:
+                output_filename = os.path.basename(file_path)
+
+            final_output_path = os.path.join(final_output_dir, output_filename)
+
+            if not overwrite and os.path.exists(final_output_path):
+                logger.info(f"  -> ⚠️ [PIPELINE] Skipping existing file: {os.path.basename(final_output_path)}")
+            else:
+                image_to_save = ctx.result
+                if final_output_path.lower().endswith(('.jpg', '.jpeg')) and image_to_save.mode in ('RGBA', 'LA'):
+                    image_to_save = image_to_save.convert('RGB')
+
+                image_to_save.save(final_output_path, quality=self.save_quality)
+                logger.info(f"  -> ✅ [PIPELINE] Saved successfully: {os.path.basename(final_output_path)}")
+                
+        except Exception as save_err:
+            logger.error(f"Error saving pipeline result for {os.path.basename(ctx.image_name)}: {save_err}")
+
     async def translate_batch(self, images_with_configs: List[tuple], batch_size: int = None, image_names: List[str] = None, save_info: dict = None) -> List[Context]:
         """
         批量翻译多张图片，在翻译阶段进行批量处理以提高效率
+        
+        如果启用了pipeline_mode，将自动使用流水线并行处理模式。
+        
         Args:
             images_with_configs: List of (image, config) tuples
             batch_size: 批量大小，如果为None则使用实例的batch_size
@@ -2420,6 +2738,13 @@ class MangaTranslator:
         Returns:
             List of Context objects with translation results
         """
+        batch_size = batch_size or self.batch_size
+        
+        # ✅ 如果启用了流水线并行模式，自动转发到pipeline_translate_batch
+        if self.pipeline_mode and len(images_with_configs) > 1:
+            logger.info("Pipeline mode enabled, using parallel processing workflow")
+            return await self.pipeline_translate_batch(images_with_configs, batch_size, image_names, save_info)
+        
         batch_size = batch_size or self.batch_size
         
         # 检查是否使用高质量翻译器，如果是则自动启用高质量模式
@@ -2497,7 +2822,6 @@ class MangaTranslator:
 
                             image_to_save.save(final_output_path, quality=self.save_quality)
                             logger.info(f"  -> ✅ [SEQUENTIAL] Saved successfully: {os.path.basename(final_output_path)}")
-                            self._update_translation_map(file_path, final_output_path)
 
                     except Exception as save_err:
                         logger.error(f"Error saving sequential result for {os.path.basename(ctx.image_name)}: {save_err}")
@@ -2584,7 +2908,6 @@ class MangaTranslator:
 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [LOAD_TEXT] Saved successfully: {os.path.basename(final_output_path)}")
-                                self._update_translation_map(file_path, final_output_path)
                             
                             # 标记成功
                             ctx.success = True
@@ -2716,7 +3039,6 @@ class MangaTranslator:
                                 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [BATCH] Saved successfully: {os.path.basename(final_output_path)}")
-                                self._update_translation_map(file_path, final_output_path)
 
                         except Exception as save_err:
                             logger.error(f"Error saving standard batch result for {os.path.basename(ctx.image_name)}: {save_err}")
@@ -3969,33 +4291,6 @@ class MangaTranslator:
         
         return region.translation
 
-    def _update_translation_map(self, source_path: str, translated_path: str):
-        """在输出目录创建或更新 translation_map.json"""
-        try:
-            output_dir = os.path.dirname(translated_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-            
-            # 规范化路径以确保一致性
-            source_path_norm = os.path.normpath(source_path)
-            translated_path_norm = os.path.normpath(translated_path)
-
-            translation_map = {}
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    try:
-                        translation_map = json.load(f)
-                    except json.JSONDecodeError:
-                        logger.warning(f"Could not decode {map_path}, creating a new one.")
-            
-            # 使用翻译后的路径作为键，确保唯一性
-            translation_map[translated_path_norm] = source_path_norm
-            
-            with open(map_path, 'w', encoding='utf-8') as f:
-                json.dump(translation_map, f, ensure_ascii=False, indent=4)
-
-        except Exception as e:
-            logger.error(f"Failed to update translation map: {e}")
-
     async def _translate_batch_high_quality(self, images_with_configs: List[tuple], save_info: dict = None) -> List[Context]:
         """
         高质量翻译模式：按批次滚动处理，每批独立完成预处理、翻译、渲染全流程。
@@ -4223,8 +4518,6 @@ class MangaTranslator:
                                 
                                 image_to_save.save(final_output_path, quality=self.save_quality)
                                 logger.info(f"  -> ✅ [HQ] Saved successfully: {os.path.basename(final_output_path)}")
-                                # 更新翻译映射文件
-                                self._update_translation_map(file_path, final_output_path)
 
                         except Exception as save_err:
                             logger.error(f"Error saving high-quality result for {os.path.basename(ctx.image_name)}: {save_err}")

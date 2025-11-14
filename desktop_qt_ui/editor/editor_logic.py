@@ -215,41 +215,31 @@ class EditorLogic(QObject):
             self.controller.load_image_and_regions(file_path)
 
     def _find_file_pair(self, file_path: str) -> (str, Optional[str]):
-        """Given a file path, find its source/translated pair using translation_map.json."""
+        """Given a file path, find its source/translated pair using _source_path.txt."""
         norm_path = os.path.normpath(file_path)
 
-        # Case 1: The given file is a translated file (a key in a map)
+        # Case 1: The given file is a translated file (has _source_path.txt)
         try:
             output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-            if os.path.exists(map_path):
-                t_map = self.translation_map_cache.get(map_path)
-                if t_map is None:
-                    with open(map_path, 'r', encoding='utf-8') as f:
-                        t_map = json.load(f)
-                    self.translation_map_cache[map_path] = t_map
-                
-                if norm_path in t_map:
-                    source = t_map[norm_path]
-                    if os.path.exists(source):
-                        return source, file_path
+            source_path_file = os.path.join(output_dir, '_source_path.txt')
+            if os.path.exists(source_path_file):
+                with open(source_path_file, 'r', encoding='utf-8') as f:
+                    source = f.read().strip()
+                if source and os.path.exists(source):
+                    return source, file_path
         except Exception: pass
         
-        # Case 2: The given file is a source file (a value in a map)
+        # Case 2: The given file is a source file (search for translated files that reference it)
         try:
             for trans_file in self.translated_files:
                 if not trans_file: continue
                 norm_trans = os.path.normpath(trans_file)
                 output_dir = os.path.dirname(norm_trans)
-                map_path = os.path.join(output_dir, 'translation_map.json')
-                if os.path.exists(map_path):
-                    t_map = self.translation_map_cache.get(map_path)
-                    if t_map is None:
-                        with open(map_path, 'r', encoding='utf-8') as f:
-                            t_map = json.load(f)
-                        self.translation_map_cache[map_path] = t_map
-
-                    if t_map.get(norm_trans) == norm_path:
+                source_path_file = os.path.join(output_dir, '_source_path.txt')
+                if os.path.exists(source_path_file):
+                    with open(source_path_file, 'r', encoding='utf-8') as f:
+                        source = f.read().strip()
+                    if source and os.path.normpath(source) == norm_path:
                         return file_path, trans_file
         except Exception: pass
 

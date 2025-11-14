@@ -266,7 +266,6 @@ def main():
                                     image_to_save.save(final_output_path, quality=save_quality)
                                 else:
                                     image_to_save.save(final_output_path)
-                                translator._update_translation_map(file_path, final_output_path)
                                 flush_print(f"  -> ✅ [BATCH] 保存成功: {os.path.basename(final_output_path)}")
                             except Exception as e:
                                 flush_print(f"  -> ❌ [BATCH] 保存文件时出错 {os.path.basename(ctx.image_name)}: {e}")
@@ -341,7 +340,6 @@ def main():
                                         image_to_save.save(final_output_path, quality=save_quality)
                                     else:
                                         image_to_save.save(final_output_path)
-                                    translator._update_translation_map(file_path, final_output_path)
                                     flush_print(f"  -> ✅ 翻译完成: {os.path.basename(final_output_path)}")
                             else:
                                 flush_print(f"  -> ✅ 文本导出成功: {os.path.basename(file_path)}")
