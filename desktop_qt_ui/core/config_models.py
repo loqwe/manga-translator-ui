@@ -124,7 +124,9 @@ class CliSettings(BaseModel):
     # 流水线并发设置
     pipeline_line1_concurrency: int = 2  # 线1并发：检测+OCR
     pipeline_line2_concurrency: int = 3  # 线2并发：翻译
-    pipeline_line3_concurrency: int = 1  # 线3并发：修复+渲染+超分
+    pipeline_translation_batch_size: int = 3  # 线2翻译批量大小
+    pipeline_line3_concurrency: int = 1  # 线3并发：修复/Inpainting
+    pipeline_line4_concurrency: int = 1  # 线4并发：渲染+超分
     generate_and_export: bool = False
     colorize_only: bool = False
     upscale_only: bool = False  # 仅超分模式
