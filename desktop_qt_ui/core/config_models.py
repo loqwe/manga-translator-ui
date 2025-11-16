@@ -125,6 +125,10 @@ class CliSettings(BaseModel):
     pipeline_translation_batch_size: int = 3  # 线2翻译批量大小
     pipeline_line3_concurrency: int = 1  # 线3并发：修复/Inpainting
     pipeline_line4_concurrency: int = 1  # 线4并发：渲染+超分
+    # 长图拼接设置
+    enable_long_image_stitching: bool = False  # 启用智能长图拼接
+    long_image_max_height: int = 10000  # 长图最大高度（像素）
+    long_image_bubble_margin: int = 100  # 气泡边界检测区域（像素）
     generate_and_export: bool = False
     colorize_only: bool = False
     upscale_only: bool = False  # 仅超分模式

@@ -319,6 +319,11 @@ class MangaTranslator:
             self.high_quality_batch_size
         )
         
+        # 长图拼接配置
+        self.enable_long_image_stitching = params.get('enable_long_image_stitching', False)
+        self.long_image_max_height = _safe_int(params.get('long_image_max_height', 10000), 10000)
+        self.long_image_bubble_margin = _safe_int(params.get('long_image_bubble_margin', 100), 100)
+        
         # 验证batch_concurrent参数
         if self.batch_concurrent and self.batch_size < 2:
             logger.warning('--batch-concurrent requires --batch-size to be at least 2. When batch_size is 1, concurrent mode has no effect.')
@@ -4642,6 +4647,74 @@ class MangaTranslator:
         import traceback
         
         total_images = len(images_with_configs)
+        
+        # === 智能长图拼接（可选） ===
+        if self.enable_long_image_stitching:
+            try:
+                from .image_stitcher import SmartImageStitcher
+                import cv2
+                import numpy as np
+                from PIL import Image
+                
+                logger.info(f"[长图拼接] 启用智能长图拼接功能")
+                logger.info(f"[长图拼接] 配置: 最大高度={self.long_image_max_height}px, 边界检测={self.long_image_bubble_margin}px")
+                logger.info(f"[长图拼接] 开始处理 {total_images} 张图片")
+                
+                # 创建拼接器
+                stitcher = SmartImageStitcher(
+                    max_height=self.long_image_max_height,
+                    bubble_margin=self.long_image_bubble_margin
+                )
+                
+                # 拼接图片
+                stitched_segments = stitcher.stitch_images(images_with_configs)
+                
+                logger.info(f"[长图拼接] 完成: {total_images}张原始图片 → {len(stitched_segments)}个长图段")
+                
+                # 处理每个长图段
+                all_segment_results = []
+                
+                for segment_idx, (stitched_img, original_configs, metadata) in enumerate(stitched_segments):
+                    logger.info(f"[长图拼接] 准备段{segment_idx+1}/{len(stitched_segments)}: {metadata['image_count']}张图, 高度{metadata['total_height']}px")
+                    
+                    # 将numpy数组转换为PIL Image
+                    if isinstance(stitched_img, np.ndarray):
+                        stitched_img_pil = Image.fromarray(cv2.cvtColor(stitched_img, cv2.COLOR_BGR2RGB))
+                    else:
+                        stitched_img_pil = stitched_img
+                    
+                    # 使用第一张图的config作为长图的config
+                    if original_configs:
+                        segment_config = original_configs[0]
+                    else:
+                        segment_config = images_with_configs[0][1] if images_with_configs else None
+                    
+                    # 将长图作为单张图片处理
+                    segment_images_configs = [(stitched_img_pil, segment_config)]
+                    
+                    # 处理这个长图段（递归调用，但不会再次拼接）
+                    # 临时禁用拼接避免递归
+                    original_stitching_flag = self.enable_long_image_stitching
+                    self.enable_long_image_stitching = False
+                    
+                    try:
+                        segment_results = await self._translate_batch_pipeline_4_lines(
+                            segment_images_configs, save_info
+                        )
+                        all_segment_results.extend(segment_results)
+                    finally:
+                        # 恢复拼接标志
+                        self.enable_long_image_stitching = original_stitching_flag
+                
+                logger.info(f"[长图拼接] 所有段处理完成，共 {len(all_segment_results)} 个结果")
+                return all_segment_results
+                
+            except Exception as e:
+                logger.error(f"[长图拼接] 拼接失败: {e}")
+                logger.exception(e)
+                logger.info(f"[长图拼接] 回退到正常流水线处理")
+                # 失败时继续使用正常流程
+        
         logger.info(f"四线流水线启动：处理 {total_images} 张图片")
         
         # 按章节分组

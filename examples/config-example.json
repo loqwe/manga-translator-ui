@@ -108,6 +108,9 @@
     "pipeline_translation_batch_size": 3,
     "pipeline_line3_concurrency": 2,
     "pipeline_line4_concurrency": 2,
+    "enable_long_image_stitching": false,
+    "long_image_max_height": 10000,
+    "long_image_bubble_margin": 100,
     "generate_and_export": false,
     "colorize_only": false,
     "upscale_only": false
