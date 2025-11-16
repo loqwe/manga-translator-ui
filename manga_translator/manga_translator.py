@@ -4671,8 +4671,8 @@ class MangaTranslator:
                 
                 logger.info(f"[长图拼接] 完成: {total_images}张原始图片 → {len(stitched_segments)}个长图段")
                 
-                # 处理每个长图段
-                all_segment_results = []
+                # 准备所有长图段（批量处理以保持上下文连贯）
+                all_segment_images_configs = []
                 
                 for segment_idx, (stitched_img, original_configs, metadata) in enumerate(stitched_segments):
                     logger.info(f"[长图拼接] 准备段{segment_idx+1}/{len(stitched_segments)}: {metadata['image_count']}张图, 高度{metadata['total_height']}px")
@@ -4687,48 +4687,49 @@ class MangaTranslator:
                     if original_configs:
                         # original_configs是[(img, config), ...]格式，提取第一个config
                         segment_config = original_configs[0][1]
-                        # 获取第一张图的名称作为基础
-                        first_img = original_configs[0][0]
-                        base_name = getattr(first_img, 'name', f'segment_{segment_idx+1}')
                     else:
                         segment_config = images_with_configs[0][1] if images_with_configs else None
-                        first_img = images_with_configs[0][0] if images_with_configs else None
-                        base_name = getattr(first_img, 'name', f'segment_{segment_idx+1}') if first_img else f'segment_{segment_idx+1}'
                     
-                    # 为长图生成名称（基于拼接的图片范围）
+                    # 为长图生成清晰的名称：seg03_img005-007_3p.jpg
                     indices = metadata['image_indices']
-                    if base_name and isinstance(base_name, str):
-                        # 移除扩展名
+                    img_count = metadata['image_count']
+                    start_num = indices[0] + 1  # 转为1-based
+                    end_num = indices[-1] + 1
+                    
+                    # 获取扩展名
+                    if original_configs:
+                        first_img = original_configs[0][0]
+                        base_name = getattr(first_img, 'name', '')
                         import os
-                        name_without_ext = os.path.splitext(base_name)[0]
-                        ext = os.path.splitext(base_name)[1] or '.jpg'
-                        # 生成新名称，例如：001-003_stitched.jpg
-                        stitched_name = f"{name_without_ext}-{indices[-1]+1:03d}_stitched{ext}"
+                        ext = os.path.splitext(base_name)[1] if base_name else '.jpg'
                     else:
-                        stitched_name = f"stitched_segment_{segment_idx+1}.jpg"
+                        ext = '.jpg'
+                    
+                    # 新命名格式：seg03_img005-007_3p.jpg
+                    stitched_name = f"seg{segment_idx+1:02d}_img{start_num:03d}-{end_num:03d}_{img_count}p{ext}"
                     
                     # 设置PIL Image的name属性
                     stitched_img_pil.name = stitched_name
                     
-                    # 将长图作为单张图片处理
-                    segment_images_configs = [(stitched_img_pil, segment_config)]
-                    
-                    # 处理这个长图段（递归调用，但不会再次拼接）
-                    # 临时禁用拼接避免递归
-                    original_stitching_flag = self.enable_long_image_stitching
-                    self.enable_long_image_stitching = False
-                    
-                    try:
-                        segment_results = await self._translate_batch_pipeline_4_lines(
-                            segment_images_configs, save_info
-                        )
-                        all_segment_results.extend(segment_results)
-                    finally:
-                        # 恢复拼接标志
-                        self.enable_long_image_stitching = original_stitching_flag
+                    # 添加到批量处理列表
+                    all_segment_images_configs.append((stitched_img_pil, segment_config))
                 
-                logger.info(f"[长图拼接] 所有段处理完成，共 {len(all_segment_results)} 个结果")
-                return all_segment_results
+                logger.info(f"[长图拼接] 所有段准备完成，开始批量处理 {len(all_segment_images_configs)} 个长图段")
+                
+                # 临时禁用拼接避免递归，然后批量处理所有段
+                original_stitching_flag = self.enable_long_image_stitching
+                self.enable_long_image_stitching = False
+                
+                try:
+                    # 一次性处理所有段，保持上下文连贯
+                    all_segment_results = await self._translate_batch_pipeline_4_lines(
+                        all_segment_images_configs, save_info
+                    )
+                    logger.info(f"[长图拼接] 所有段处理完成，共 {len(all_segment_results)} 个结果")
+                    return all_segment_results
+                finally:
+                    # 恢复拼接标志
+                    self.enable_long_image_stitching = original_stitching_flag
                 
             except Exception as e:
                 logger.error(f"[长图拼接] 拼接失败: {e}")
