@@ -68,15 +68,44 @@ echo 启动PowerShell同步脚本...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_SCRIPT%" !PS_ARGS!
 
+:: 保存退出码
+set "EXIT_CODE=%errorlevel%"
+
 :: 检查执行结果
-if errorlevel 1 (
+if %EXIT_CODE% neq 0 (
     echo.
-    echo [错误] 脚本执行失败，错误码: %errorlevel%
-    pause
-    exit /b %errorlevel%
+    echo ========================================
+    echo [错误] 脚本执行失败
+    echo ========================================
+    echo 错误码: %EXIT_CODE%
+    echo.
+    echo 可能的原因:
+    echo   1. Git操作失败（合并冲突、网络问题等）
+    echo   2. 分支不存在或权限不足
+    echo   3. PowerShell脚本内部错误
+    echo.
+    echo 建议:
+    echo   - 查看上方的详细错误信息
+    echo   - 手动运行 git status 检查仓库状态
+    echo   - 确保网络连接正常
+    echo.
+    echo 按任意键退出...
+    pause >nul
+    exit /b %EXIT_CODE%
 )
 
-:: 成功时不暂停（除非使用 PAUSE_ON_SUCCESS 环境变量）
+:: 成功执行
+echo.
+echo ========================================
+echo 操作成功完成！
+echo ========================================
+echo.
+
+:: 根据环境变量决定是否暂停
 if defined PAUSE_ON_SUCCESS (
-    pause
+    echo 按任意键退出...
+    pause >nul
+) else (
+    echo 窗口将在3秒后自动关闭...
+    timeout /t 3 >nul
 )
