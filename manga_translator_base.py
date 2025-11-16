@@ -3730,8 +3730,8 @@ class MangaTranslator:
             translator.attempts = self.attempts
 
             # 为所有翻译器构建和设置文本上下文（包括HQ翻译器）
-            # 默认使用原文作为上下文（而不是译文）
-            use_original_text = True
+            # 确定是否使用并发模式和原文上下文
+            use_original_text = self.batch_concurrent and self.batch_size > 1
 
             done_pages = self.all_page_translations
             if self.context_size > 0 and done_pages:
