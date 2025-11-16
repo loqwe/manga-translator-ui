@@ -5193,6 +5193,18 @@ class MangaTranslator:
                 logger.info(f"Line2: 批次总共 {len(all_texts)} 个文本区域，准备高质量翻译")
                 logger.debug(f"Line2: 批次文本内容: {all_texts}")
                 
+                # 【关键修复】在翻译前先保存原文，使后续批次能立即获取上下文
+                # 这样可以避免并发竞态条件导致上下文丢失
+                batch_originals = {}
+                for ctx, config, image_idx in batch_buffer:
+                    if ctx.text_regions:
+                        for region in ctx.text_regions:
+                            batch_originals[region.text] = region.text  # 原文->原文的映射
+                
+                if batch_originals:
+                    self.all_page_translations.append(batch_originals)
+                    logger.info(f"Line2: 批次{current_batch_index}在翻译前保存了 {len(batch_originals)} 条原文（供后续批次使用）")
+                
                 try:
                     # 为高质量翻译器准备batch_data（启用高质量翻译模式和AI断句）
                     if sample_config.translator.translator in [Translator.openai_hq, Translator.gemini_hq]:
@@ -5280,7 +5292,8 @@ class MangaTranslator:
                 if ctx.text_regions:
                     ctx.text_regions = await self._apply_post_translation_processing(ctx, config)
             
-            # 保存批次翻译结果（原文->译文映射）
+            # 更新批次翻译结果（原文->译文映射）
+            # 注意：翻译前已经保存了原文，这里需要更新为译文
             batch_translations = {}
             for ctx, config, image_idx in batch_buffer:
                 if ctx.text_regions:
@@ -5288,9 +5301,10 @@ class MangaTranslator:
                         if r.translation:
                             batch_translations[r.text] = r.translation
             
-            if batch_translations:
-                self.all_page_translations.append(batch_translations)
-                logger.info(f"Line2: 保存批次{current_batch_index}的 {len(batch_translations)} 条翻译结果")
+            if batch_translations and current_batch_index < len(self.all_page_translations):
+                # 更新已存在的原文条目为译文
+                self.all_page_translations[current_batch_index].update(batch_translations)
+                logger.info(f"Line2: 更新批次{current_batch_index}的 {len(batch_translations)} 条翻译结果（原文->译文）")
             
             logger.info(f"Line2: 完成批次{current_batch_index}翻译 ({len(batch_buffer)}张图片)")
             
