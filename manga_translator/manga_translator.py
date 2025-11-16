@@ -1729,8 +1729,11 @@ class MangaTranslator:
                         # 如果不使用原文，则跳过当前批次的页面（因为它们还没有翻译完成）
                         pass
         elif current_page_index is not None:
-            # 使用指定页面索引之前的页面作为上下文
-            available_pages = self.all_page_translations[:current_page_index] if self.all_page_translations else []
+            # 流水线模式：只使用指定批次索引的页面作为上下文（不跨批次）
+            if current_page_index >= 0 and current_page_index < len(self.all_page_translations):
+                available_pages = [self.all_page_translations[current_page_index]]
+            else:
+                available_pages = []
         else:
             # 使用所有已完成的页面
             available_pages = self.all_page_translations or []
@@ -5169,11 +5172,12 @@ class MangaTranslator:
                         sample_ctx.high_quality_batch_size = len(batch_buffer)
                         logger.info(f"Line2: 已设置high_quality_batch_data，批次大小: {len(batch_data)}")
                     
-                    # 整个批次统一翻译（传递page_index以启用前一批次上下文）
+                    # 整个批次统一翻译（传递prev_batch_index以使用前一批次上下文）
                     # 高质量翻译器同时处理批次内的多图上下文
+                    prev_batch_index = current_batch_index - 1 if current_batch_index > 0 else None
                     translated_texts = await self._batch_translate_texts(
                         all_texts, sample_config, sample_ctx,
-                        page_index=current_batch_index  # ← 使用前一批次作为上下文
+                        page_index=prev_batch_index  # ← 使用前一批次作为上下文
                     )
                     
                     # AI断句处理：整个批次级别检查数量匹配
