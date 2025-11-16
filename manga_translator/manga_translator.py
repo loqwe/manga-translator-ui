@@ -4685,9 +4685,30 @@ class MangaTranslator:
                     
                     # 使用第一张图的config作为长图的config
                     if original_configs:
-                        segment_config = original_configs[0]
+                        # original_configs是[(img, config), ...]格式，提取第一个config
+                        segment_config = original_configs[0][1]
+                        # 获取第一张图的名称作为基础
+                        first_img = original_configs[0][0]
+                        base_name = getattr(first_img, 'name', f'segment_{segment_idx+1}')
                     else:
                         segment_config = images_with_configs[0][1] if images_with_configs else None
+                        first_img = images_with_configs[0][0] if images_with_configs else None
+                        base_name = getattr(first_img, 'name', f'segment_{segment_idx+1}') if first_img else f'segment_{segment_idx+1}'
+                    
+                    # 为长图生成名称（基于拼接的图片范围）
+                    indices = metadata['image_indices']
+                    if base_name and isinstance(base_name, str):
+                        # 移除扩展名
+                        import os
+                        name_without_ext = os.path.splitext(base_name)[0]
+                        ext = os.path.splitext(base_name)[1] or '.jpg'
+                        # 生成新名称，例如：001-003_stitched.jpg
+                        stitched_name = f"{name_without_ext}-{indices[-1]+1:03d}_stitched{ext}"
+                    else:
+                        stitched_name = f"stitched_segment_{segment_idx+1}.jpg"
+                    
+                    # 设置PIL Image的name属性
+                    stitched_img_pil.name = stitched_name
                     
                     # 将长图作为单张图片处理
                     segment_images_configs = [(stitched_img_pil, segment_config)]
