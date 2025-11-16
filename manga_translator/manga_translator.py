@@ -172,6 +172,13 @@ class MangaTranslator:
         self._current_image_context = None  # 存储当前处理图片的上下文信息
         self._saved_image_contexts = {}     # 存储批量处理中每个图片的上下文信息
         
+        # API失败智能降级相关属性
+        self._degraded_mode = False          # 是否处于降级模式
+        self._degraded_success_count = 0     # 降级模式下成功翻译的图片数
+        self._degraded_recovery_threshold = 3  # 恢复正常模式所需的连续成功数
+        self._original_batch_size = None     # 原始批次大小
+        self._original_line2_concurrency = None  # 原始Line2并发数
+        
         # 设置日志文件
         self._setup_log_file()
 
@@ -5155,6 +5162,62 @@ class MangaTranslator:
         
         return final_results
 
+    def _is_api_polling_failure(self, translated_texts):
+        """检测是否为API轮询失败错误"""
+        if not translated_texts or len(translated_texts) < 2:
+            return False
+        
+        # 检测是否包含特定的错误消息
+        error_patterns = [
+            '所有API密钥均请求失败',
+            '具体错误请查看轮询日志',
+            'all.*key.*failed',
+            'API.*polling.*failed'
+        ]
+        
+        text_combined = ' '.join(translated_texts[:5])  # 检查前5条
+        return any(pattern in text_combined for pattern in error_patterns)
+    
+    async def _enter_degraded_mode(self):
+        """进入降级模式：单图处理，减少并发数"""
+        if self._degraded_mode:
+            return  # 已经在降级模式
+        
+        self._degraded_mode = True
+        self._degraded_success_count = 0
+        
+        # 保存原始配置
+        self._original_batch_size = self.pipeline_translation_batch_size
+        self._original_line2_concurrency = self.pipeline_line2_concurrency
+        
+        # 降级配置：单图处理，并发数为1
+        self.pipeline_translation_batch_size = 1
+        # 注意：Line2并发数不能在运行时改变（线程已启动）
+        # 但批次大小变为1就能实现单图处理
+        
+        logger.warning("="*80)
+        logger.warning("🔻 API轮询失败被检测到！启动智能降级模式")
+        logger.warning(f"降级配置：批次大小 {self._original_batch_size} → 1 (单图处理)")
+        logger.warning(f"恢复条件：连续成功 {self._degraded_recovery_threshold} 张图片")
+        logger.warning("="*80)
+    
+    async def _exit_degraded_mode(self):
+        """退出降级模式：恢复批量处理"""
+        if not self._degraded_mode:
+            return  # 未在降级模式
+        
+        self._degraded_mode = False
+        self._degraded_success_count = 0
+        
+        # 恢复原始配置
+        if self._original_batch_size is not None:
+            self.pipeline_translation_batch_size = self._original_batch_size
+        
+        logger.info("="*80)
+        logger.info("✨ API恢复正常！退出降级模式")
+        logger.info(f"恢复配置：批次大小 1 → {self.pipeline_translation_batch_size} (批量处理)")
+        logger.info("="*80)
+    
     async def _process_translation_batch(self, batch_buffer, translate_queue, page_counter, page_counter_lock):
         """处理翻译批次：使用原文作为上下文"""
         if not batch_buffer:
@@ -5230,6 +5293,21 @@ class MangaTranslator:
                         page_index=prev_batch_index  # ← 使用前一批次作为上下文
                     )
                     
+                    # 【智能降级检测】检测API轮询失败
+                    if self._is_api_polling_failure(translated_texts):
+                        logger.error(f"Line2: 批次{current_batch_index} 检测到API轮询失败")
+                        await self._enter_degraded_mode()
+                        # 使用原文作为后备
+                        translated_texts = all_texts.copy()
+                    elif self._degraded_mode:
+                        # 在降级模式下，翻译成功的计数
+                        self._degraded_success_count += len(batch_buffer)
+                        logger.info(f"Line2: 降级模式 - 成功翻译 {len(batch_buffer)} 张图片，累计成功 {self._degraded_success_count}/{self._degraded_recovery_threshold}")
+                        
+                        # 检查是否达到恢复阈值
+                        if self._degraded_success_count >= self._degraded_recovery_threshold:
+                            await self._exit_degraded_mode()
+                    
                     # AI断句处理：整个批次级别检查数量匹配
                     if len(translated_texts) != len(all_texts):
                         logger.warning(f"Line2: 批次AI断句导致翻译数量不匹配 - 输入:{len(all_texts)}, 输出:{len(translated_texts)}")
@@ -5260,8 +5338,14 @@ class MangaTranslator:
                                 logger.debug(f"Line2: 图片{image_idx+1} 区域{region_idx}: '{region.text}' -> '{region.translation}'")
 
                 except Exception as e:
+                    # 【智能降级检测】检查是否为API失败
+                    error_msg = str(e)
+                    if '所有API密钥均请求失败' in error_msg or 'API.*failed' in error_msg.lower():
+                        logger.error(f"Line2: 批次{current_batch_index} 翻译异常 - 检测到API失败: {e}")
+                        await self._enter_degraded_mode()
+                    
                     # 捕获翻译错误（包括AI断句数量不匹配）
-                    if "Translation count mismatch" in str(e):
+                    if "Translation count mismatch" in error_msg:
                         logger.warning(f"Line2: 批次AI断句数量不匹配错误，使用原文作为备选: {e}")
                         # 使用原文作为翻译结果
                         for text_idx, (batch_idx, region_idx, image_idx) in enumerate(text_mapping):
