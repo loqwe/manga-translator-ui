@@ -1668,8 +1668,31 @@ class MangaTranslator:
               
             region.text = stripped_text.strip()     
             
+            # 增强过滤：检测网站水印
+            is_watermark = False
+            watermark_patterns = [
+                '웹툰왕국뉴토끼',  # 韩文漫画网站水印
+                'newtoki',
+                'manga18',
+                '뉴토끼',
+                'webtoon',
+                'toonkor',
+            ]
+            for pattern in watermark_patterns:
+                if pattern.lower() in region.text.lower():
+                    is_watermark = True
+                    break
+            
+            # 增强过滤：检测混合日韩文（MangaOCR误识别）
+            has_hiragana = any('\u3040' <= ch <= '\u309f' for ch in region.text)
+            has_katakana = any('\u30a0' <= ch <= '\u30ff' for ch in region.text)
+            has_hangul = any('\uac00' <= ch <= '\ud7a3' for ch in region.text)
+            is_mixed_jp_kr = (has_hiragana or has_katakana) and has_hangul
+            
             if len(region.text) < config.ocr.min_text_length \
                     or not is_valuable_text(region.text) \
+                    or is_watermark \
+                    or is_mixed_jp_kr \
                     or (not config.translator.no_text_lang_skip and langcodes.tag_distance(region.source_lang, config.translator.target_lang) == 0):
                 if region.text.strip():
                     logger.info(f'Filtered out: {region.text}')
@@ -1677,6 +1700,10 @@ class MangaTranslator:
                         logger.info('Reason: Text length is less than the minimum required length.')
                     elif not is_valuable_text(region.text):
                         logger.info('Reason: Text is not considered valuable.')
+                    elif is_watermark:
+                        logger.info('Reason: Detected as website watermark or spam.')
+                    elif is_mixed_jp_kr:
+                        logger.info('Reason: Mixed Japanese-Korean text detected (likely OCR error).')
                     elif langcodes.tag_distance(region.source_lang, config.translator.target_lang) == 0:
                         logger.info('Reason: Text language matches the target language and no_text_lang_skip is False.')
             else:
