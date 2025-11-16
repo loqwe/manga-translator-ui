@@ -4726,19 +4726,30 @@ class MangaTranslator:
                     start_num = indices[0] + 1  # 转为1-based
                     end_num = indices[-1] + 1
                     
-                    # 获取扩展名
+                    # 获取原始图片的完整路径和扩展名
                     if original_configs:
                         first_img = original_configs[0][0]
                         base_name = getattr(first_img, 'name', '')
                         import os
-                        ext = os.path.splitext(base_name)[1] if base_name else '.jpg'
+                        if base_name:
+                            # 获取原始图片的目录路径
+                            original_dir = os.path.dirname(base_name)
+                            ext = os.path.splitext(base_name)[1]
+                        else:
+                            original_dir = ''
+                            ext = '.jpg'
                     else:
+                        original_dir = ''
                         ext = '.jpg'
                     
                     # 新命名格式：seg03_img005-007_3p.jpg
-                    stitched_name = f"seg{segment_idx+1:02d}_img{start_num:03d}-{end_num:03d}_{img_count}p{ext}"
+                    new_filename = f"seg{segment_idx+1:02d}_img{start_num:03d}-{end_num:03d}_{img_count}p{ext}"
                     
-                    # 设置PIL Image的name属性
+                    # 设置PIL Image的name属性（包含完整路径）
+                    if original_dir:
+                        stitched_name = os.path.join(original_dir, new_filename)
+                    else:
+                        stitched_name = new_filename
                     stitched_img_pil.name = stitched_name
                     
                     # 添加到批量处理列表
