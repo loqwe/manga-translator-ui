@@ -127,6 +127,7 @@ class CliSettings(BaseModel):
     pipeline_translation_batch_size: int = 3  # 线2翻译批量大小
     pipeline_line3_concurrency: int = 1  # 线3并发：修复/Inpainting
     pipeline_line4_concurrency: int = 1  # 线4并发：渲染+超分
+    pipeline_segment_threshold: int = 15  # 分段阈值：章节页数>此值时启用分段并行
     generate_and_export: bool = False
     colorize_only: bool = False
     upscale_only: bool = False  # 仅超分模式
