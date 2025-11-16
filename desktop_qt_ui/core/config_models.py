@@ -118,6 +118,13 @@ class CliSettings(BaseModel):
     save_quality: int = 100
     batch_size: int = 1
     batch_concurrent: bool = False
+    pipeline_mode: bool = False  # 流水线并行模式：在等待AI翻译时并行处理检测/OCR
+    # 流水线并发设置
+    pipeline_line1_concurrency: int = 2  # 线1并发：检测+OCR
+    pipeline_line2_concurrency: int = 3  # 线2并发：翻译
+    pipeline_translation_batch_size: int = 3  # 线2翻译批量大小
+    pipeline_line3_concurrency: int = 1  # 线3并发：修复/Inpainting
+    pipeline_line4_concurrency: int = 1  # 线4并发：渲染+超分
     generate_and_export: bool = False
     colorize_only: bool = False
     upscale_only: bool = False  # 仅超分模式

@@ -434,7 +434,6 @@ class MangaTranslatorLocal(MangaTranslator):
                             save_ctx.save_quality = self.save_quality
                             
                             save_result(ctx.result, output_dest, save_ctx)
-                            self._update_translation_map(file_path, output_dest)
                             translated_count += 1
                         
                         # 保存文本文件（如果需要）

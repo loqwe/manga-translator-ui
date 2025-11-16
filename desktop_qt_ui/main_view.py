@@ -2,7 +2,7 @@
 import os
 from functools import partial
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QSettings, QByteArray
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,10 +19,12 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 from services import get_config_service
 from widgets.file_list_view import FileListView
+from widgets.custom_comic_panel import CustomComicPanel
 from utils.resource_helper import resource_path
 
 
@@ -489,12 +491,12 @@ class MainView(QWidget):
         right_layout = QVBoxLayout(right_panel)
         
         # 右侧的上下分割器 (设置 vs 日志)
-        right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_layout.addWidget(right_splitter)
+        self.right_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_layout.addWidget(self.right_splitter)
 
         # 设置标签页
         self.settings_tabs = QTabWidget()
-        right_splitter.addWidget(self.settings_tabs)
+        self.right_splitter.addWidget(self.settings_tabs)
 
         # --- 动态创建标签页和其内部布局 ---
         self.tab_frames = {}
@@ -531,17 +533,80 @@ class MainView(QWidget):
             # 保存对滚动区域内容面板的引用，以便后续添加控件
             self.tab_frames[f"{tab_name}_left"] = left_scroll_content
             self.tab_frames[f"{tab_name}_right"] = right_scroll_content
+        
+        # 添加自定义标签页（单列布局）
+        self.custom_panel = CustomComicPanel(self)
+        self.settings_tabs.addTab(self.custom_panel, "自定义")
 
         # 日志框
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setPlaceholderText("日志输出...")
-        right_splitter.addWidget(self.log_box)
+        self.right_splitter.addWidget(self.log_box)
 
-        right_splitter.setStretchFactor(0, 2) # 让设置面板占据更多空间
-        right_splitter.setStretchFactor(1, 1)
+        self.right_splitter.setStretchFactor(0, 2) # 让设置面板占据更多空间
+        self.right_splitter.setStretchFactor(1, 1)
+
+        # 监听标签页切换，自定义标签页隐藏全局日志
+        self.settings_tabs.currentChanged.connect(self._on_tab_changed)
+        
+        # 监听 Splitter 移动，保存位置（signal 带参数，这里用 lambda 丢弃参数）
+        self.right_splitter.splitterMoved.connect(lambda pos, index: self._save_right_splitter_state())
+        
+        # 恢复 Splitter 位置
+        QTimer.singleShot(0, self._restore_right_splitter_state)
+        # 退出前保存一次位置
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._save_right_splitter_state)
 
         return right_panel
+    
+    def _on_tab_changed(self, index: int):
+        """标签页切换时，控制全局日志框的显示/隐藏"""
+        current_tab_name = self.settings_tabs.tabText(index)
+        if current_tab_name == "自定义":
+            # 切换到自定义标签页，隐藏全局日志
+            # 进入自定义前保存一次当前大小
+            self._save_right_splitter_state()
+            self.log_box.setVisible(False)
+        else:
+            # 切换到其他标签页（基础设置、高级设置、选项），显示全局日志
+            self.log_box.setVisible(True)
+            # 日志重新可见后再恢复一次分割条位置
+            QTimer.singleShot(0, self._restore_right_splitter_state)
+    
+    def _save_right_splitter_state(self):
+        """保存主 Splitter（设置区 vs 日志区）的位置"""
+        try:
+            settings = QSettings("MangaTranslator", "MainView")
+            settings.setValue("ui/right_splitter_state", self.right_splitter.saveState())
+            settings.setValue("ui/right_splitter_sizes", self.right_splitter.sizes())
+        except Exception:
+            pass
+    
+    def _restore_right_splitter_state(self):
+        """恢复主 Splitter 的位置"""
+        try:
+            settings = QSettings("MangaTranslator", "MainView")
+            state = settings.value("ui/right_splitter_state", None, type=QByteArray)
+            if state:
+                try:
+                    # 优先使用更稳健的状态恢复
+                    self.right_splitter.restoreState(state)
+                    return
+                except Exception:
+                    pass
+            sizes = settings.value("ui/right_splitter_sizes")
+            if sizes:
+                try:
+                    if isinstance(sizes, list):
+                        sizes = [int(x) for x in sizes]
+                    self.right_splitter.setSizes(sizes)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def append_log(self, message):
         """安全地将消息追加到日志框。"""

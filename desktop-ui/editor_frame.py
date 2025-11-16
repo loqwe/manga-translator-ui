@@ -81,35 +81,31 @@ class EditorFrame(ctk.CTkFrame):
         self.config_service.reload_from_disk()
 
     def _find_file_pair(self, file_path: str) -> (str, Optional[str]):
-        """Given a file path, find its source/translated pair using translation_map.json."""
+        """Given a file path, find its source/translated pair using _source_path.txt."""
         norm_path = os.path.normpath(file_path)
         
-        # Case 1: The given file is a translated file (a key in a map)
+        # Case 1: The given file is a translated file (has _source_path.txt)
         try:
             output_dir = os.path.dirname(norm_path)
-            map_path = os.path.join(output_dir, 'translation_map.json')
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    t_map = json.load(f)
-                if norm_path in t_map:
-                    source = t_map[norm_path]
-                    if os.path.exists(source):
-                        return source, file_path
+            source_path_file = os.path.join(output_dir, '_source_path.txt')
+            if os.path.exists(source_path_file):
+                with open(source_path_file, 'r', encoding='utf-8') as f:
+                    source = f.read().strip()
+                if source and os.path.exists(source):
+                    return source, file_path
         except Exception: pass
         
-        # Case 2: The given file is a source file (a value in a map)
+        # Case 2: The given file is a source file (search for translated files that reference it)
         try:
-            # This is inefficient, but necessary as the source file doesn't know its output dir.
-            # We check against already known translated files.
             for trans_file in self.translated_files:
                 if not trans_file: continue
                 norm_trans = os.path.normpath(trans_file)
                 output_dir = os.path.dirname(norm_trans)
-                map_path = os.path.join(output_dir, 'translation_map.json')
-                if os.path.exists(map_path):
-                    with open(map_path, 'r', encoding='utf-8') as f:
-                        t_map = json.load(f)
-                    if t_map.get(norm_trans) == norm_path:
+                source_path_file = os.path.join(output_dir, '_source_path.txt')
+                if os.path.exists(source_path_file):
+                    with open(source_path_file, 'r', encoding='utf-8') as f:
+                        source = f.read().strip()
+                    if source and os.path.normpath(source) == norm_path:
                         return file_path, trans_file
         except Exception: pass
 
@@ -397,15 +393,12 @@ class EditorFrame(ctk.CTkFrame):
             self.original_size = image.size
             self.property_panel.hide_mask_editor()
 
-            # 检查是否在translation_map中存在对应关系
+            # 检查是否是翻译后的图片（有 _source_path.txt）
             has_translation_mapping = False
             try:
                 output_dir = os.path.dirname(image_path)
-                map_path = os.path.join(output_dir, 'translation_map.json')
-                if os.path.exists(map_path):
-                    with open(map_path, 'r', encoding='utf-8') as f:
-                        translation_map = json.load(f)
-                    has_translation_mapping = os.path.normpath(image_path) in translation_map
+                source_path_file = os.path.join(output_dir, '_source_path.txt')
+                has_translation_mapping = os.path.exists(source_path_file)
             except:
                 pass
 
@@ -444,18 +437,17 @@ class EditorFrame(ctk.CTkFrame):
     def _on_file_selected_from_list(self, file_path: str):
         self.file_manager.load_image_from_path(file_path)
 
-        # 检查翻译映射
+        # 检查是否是翻译后的文件
         output_dir = os.path.dirname(file_path)
-        map_path = os.path.join(output_dir, 'translation_map.json')
-        if os.path.exists(map_path):
-            with open(map_path, 'r', encoding='utf-8') as f:
-                try:
-                    translation_map = json.load(f)
-                    source_file = translation_map.get(os.path.normpath(file_path))
-                    if source_file:
-                        self.set_file_lists([source_file], [file_path])
-                except json.JSONDecodeError:
-                    pass # Ignore if map is corrupted
+        source_path_file = os.path.join(output_dir, '_source_path.txt')
+        if os.path.exists(source_path_file):
+            try:
+                with open(source_path_file, 'r', encoding='utf-8') as f:
+                    source_file = f.read().strip()
+                if source_file:
+                    self.set_file_lists([source_file], [file_path])
+            except Exception:
+                pass # Ignore if file is corrupted
     
     def _generate_mask_for_new_file(self):
         """为新文件生成蒙版（在蒙版视图切换文件时使用）"""
@@ -520,20 +512,17 @@ class EditorFrame(ctk.CTkFrame):
             show_toast(self, "已经是编辑模式。", level="info")
             return
 
-        # 从translation_map.json中查找源文件
+        # 从 _source_path.txt 中查找源文件
         source_file = None
         try:
-            # 假设地图在翻译文件的同级目录
             output_dir = os.path.dirname(current_file)
-            map_path = os.path.join(output_dir, 'translation_map.json')
+            source_path_file = os.path.join(output_dir, '_source_path.txt')
             
-            if os.path.exists(map_path):
-                with open(map_path, 'r', encoding='utf-8') as f:
-                    translation_map = json.load(f)
-                # 使用规范化路径进行查找
-                source_file = translation_map.get(os.path.normpath(current_file))
+            if os.path.exists(source_path_file):
+                with open(source_path_file, 'r', encoding='utf-8') as f:
+                    source_file = f.read().strip()
         except Exception as e:
-            show_toast(self, f"查找翻译地图时出错: {e}", level="error")
+            show_toast(self, f"读取源路径文件时出错: {e}", level="error")
             return
 
         if source_file and os.path.exists(source_file):
@@ -611,16 +600,14 @@ class EditorFrame(ctk.CTkFrame):
                 try:
                     corresponding_source = None
                     output_dir = os.path.dirname(file_path)
-                    map_path = os.path.join(output_dir, 'translation_map.json')
-                    if os.path.exists(map_path):
-                        with open(map_path, 'r', encoding='utf-8') as f:
-                            translation_map = json.load(f)
-                        # Use normpath for lookup to match the key format
-                        corresponding_source = translation_map.get(os.path.normpath(file_path))
+                    source_path_file = os.path.join(output_dir, '_source_path.txt')
+                    if os.path.exists(source_path_file):
+                        with open(source_path_file, 'r', encoding='utf-8') as f:
+                            corresponding_source = f.read().strip()
 
                     if corresponding_source:
                         normalized_corresponding_source = os.path.normpath(corresponding_source)
-                        print(f"对应的源图 (来自地图): {corresponding_source}")
+                        print(f"对应的源图 (来自 _source_path.txt): {corresponding_source}")
                         print(f"标准化后比较: {normalized_current_file} vs {normalized_corresponding_source}")
                         if normalized_current_file == normalized_corresponding_source:
                             should_clear_editor = True
@@ -628,9 +615,9 @@ class EditorFrame(ctk.CTkFrame):
                         else:
                             print(f"不匹配: 当前文件 {normalized_current_file} != 对应源图 {normalized_corresponding_source}")
                     else:
-                        print(f"在 translation_map.json 中未找到 {file_path} 的源图")
+                        print(f"在 _source_path.txt 中未找到 {file_path} 的源图")
                 except Exception as e:
-                    print(f"查找翻译地图时出错: {e}")
+                    print(f"读取源路径文件时出错: {e}")
                     pass
 
             # 情况3：卸载源图，但当前显示的是对应的翻译图
@@ -669,13 +656,12 @@ class EditorFrame(ctk.CTkFrame):
                 translated_to_remove = file_path
                 try:
                     output_dir = os.path.dirname(norm_file_path)
-                    map_path = os.path.join(output_dir, 'translation_map.json')
-                    if os.path.exists(map_path):
-                        with open(map_path, 'r', encoding='utf-8') as f:
-                            t_map = json.load(f)
-                        source_to_remove = t_map.get(norm_file_path)
+                    source_path_file = os.path.join(output_dir, '_source_path.txt')
+                    if os.path.exists(source_path_file):
+                        with open(source_path_file, 'r', encoding='utf-8') as f:
+                            source_to_remove = f.read().strip()
                 except Exception:
-                    pass # 忽略地图读取错误
+                    pass # 忽略文件读取错误
             elif is_source:
                 source_to_remove = file_path
                 # 通过遍历查找对应的翻译文件
@@ -683,16 +669,14 @@ class EditorFrame(ctk.CTkFrame):
                     found = False
                     for f in self.translated_files:
                         output_dir = os.path.dirname(os.path.normpath(f))
-                        map_path = os.path.join(output_dir, 'translation_map.json')
-                        if os.path.exists(map_path):
-                            with open(map_path, 'r', encoding='utf-8') as f:
-                                t_map = json.load(f)
-                            for trans, src in t_map.items():
-                                if os.path.normpath(src) == norm_file_path:
-                                    translated_to_remove = trans
-                                    found = True
-                                    break
-                        if found: break
+                        source_path_file = os.path.join(output_dir, '_source_path.txt')
+                        if os.path.exists(source_path_file):
+                            with open(source_path_file, 'r', encoding='utf-8') as f:
+                                source = f.read().strip()
+                            if source and os.path.normpath(source) == norm_file_path:
+                                translated_to_remove = f
+                                found = True
+                                break
                 except Exception:
                     pass
 
