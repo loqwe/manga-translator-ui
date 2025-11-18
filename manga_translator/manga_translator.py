@@ -5357,6 +5357,9 @@ class MangaTranslator:
                                     region.target_lang = config.translator.target_lang
                                     region._alignment = config.render.alignment
                                     region._direction = config.render.direction
+                        # 标记翻译错误（使用原文）
+                        for ctx, config, _ in batch_buffer:
+                            ctx.translation_error = f"批次翻译失败（AI断句数量不匹配），已使用原文: {error_msg}"
                     else:
                         logger.error(f"Line2: 批次翻译出错: {e}")
                         logger.error(f"Line2: 错误详情: {traceback.format_exc()}")
@@ -5370,6 +5373,9 @@ class MangaTranslator:
                                     region.target_lang = config.translator.target_lang
                                     region._alignment = config.render.alignment
                                     region._direction = config.render.direction
+                        # 标记翻译错误（使用原文）
+                        for ctx, config, _ in batch_buffer:
+                            ctx.translation_error = f"批次翻译失败，已使用原文: {error_msg}\n详情: {traceback.format_exc()}"
 
             # 应用后处理
             for ctx, config, image_idx in batch_buffer:
@@ -5399,6 +5405,11 @@ class MangaTranslator:
         except Exception as e:
             logger.error(f"Line2: 批量翻译出错: {e}")
             logger.error(f"Line2: 错误详情: {traceback.format_exc()}")
+            
+            # 标记批次中所有图片翻译失败
+            for ctx, config, _ in batch_buffer:
+                if not hasattr(ctx, 'translation_error') or not ctx.translation_error:
+                    ctx.translation_error = f"批次翻译过程出错: {str(e)}\n详情: {traceback.format_exc()}"
             
             # 出错时仍然要将项目传递给下一阶段，避免流水线阻塞
             for ctx, config, image_idx in batch_buffer:

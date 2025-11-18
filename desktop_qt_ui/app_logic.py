@@ -1399,11 +1399,16 @@ class TranslationWorker(QObject):
                             results.append({'success': True, 'original_path': ctx.image_name, 'image_data': None})
                             success_count += 1
                         else:
+                            # 翻译结果为空的失败情况
+                            img_name = os.path.basename(ctx.image_name) if hasattr(ctx, 'image_name') and ctx.image_name else 'Unknown'
                             results.append({'success': False, 'original_path': ctx.image_name, 'error': '翻译结果为空'})
                             failed_count += 1
+                            self.log_received.emit(f"⚠️ 图片 {img_name} 翻译失败：翻译结果为空")
                     else:
-                        results.append({'succes000000000000000000000000000000000000000000s': False, 'original_path': 'Unknown', 'error': 'Batch translation returned no context'})
+                        # ctx 本身为 None 的失败情况
+                        results.append({'success': False, 'original_path': 'Unknown', 'error': 'Batch translation returned no context'})
                         failed_count += 1
+                        self.log_received.emit(f"⚠️ 图片翻译失败：批量翻译返回空上下文（ctx=None）")
 
                 if failed_count > 0:
                     self.log_received.emit(f"\n⚠️ 批量翻译完成：成功 {success_count}/{total_images} 张，失败 {failed_count}/{total_images} 张")
