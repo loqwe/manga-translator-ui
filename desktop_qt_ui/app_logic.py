@@ -730,20 +730,37 @@ class MainAppLogic(QObject):
         
         # 如果有旧线程还在运行，等待它结束（不使用 terminate）
         if self.thread is not None and self.thread.isRunning():
-            self.logger.warning("检测到旧线程还在运行，等待其结束...")
+            self.logger.warning("检测到旧线程还在运行，正在请求停止...")
+            self.state_manager.set_status_message("正在停止旧任务...")
+            
             # 通知 worker 停止
             if self.worker:
                 try:
                     self.worker.stop()
-                except:
-                    pass
+                except Exception as e:
+                    self.logger.warning(f"停止worker时出错: {e}")
+            
             # 请求线程退出
             self.thread.quit()
-            # 等待最多500ms
-            if not self.thread.wait(500):
-                self.logger.warning("旧线程500ms内未停止，放弃等待并继续")
+            
+            # 等待最多5秒（给渲染任务足够的时间完成）
+            wait_time = 5000  # 5秒
+            if not self.thread.wait(wait_time):
+                self.logger.error(f"旧线程在{wait_time}ms内未停止，强制终止")
+                # 最后手段：强制终止（可能导致资源泄漏，但比线程冲突好）
+                self.thread.terminate()
+                self.thread.wait()  # 等待终止完成
+                self.logger.warning("旧线程已被强制终止")
+            else:
+                self.logger.info("旧线程已正常停止")
+            
+            # 清理引用
             self.thread = None
             self.worker = None
+            
+            # 重置状态
+            self.state_manager.set_translating(False)
+            self.state_manager.set_status_message("就绪")
 
         # 检查文件列表是否为空
         files_to_process = self._resolve_input_files()
@@ -887,13 +904,17 @@ class MainAppLogic(QObject):
         except Exception as e:
             self.logger.error(f"完成任务状态更新或信号发射时发生致命错误: {e}", exc_info=True)
         finally:
+            # 清理线程引用（线程应该已经通过deleteLater自动清理）
+            # 只在线程仍在运行时进行额外处理
             if self.thread and self.thread.isRunning():
+                self.logger.warning("任务完成但线程仍在运行，请求退出...")
                 self.thread.quit()
-                self.thread.wait(5000)
-                if self.thread.isRunning():
-                    self.logger.warning("Thread did not finish within timeout, terminating...")
-                    self.thread.terminate()
-                    self.thread.wait()
+                # 不阻塞UI，让deleteLater处理清理
+                # 如果线程在2秒内没有停止，记录警告但不强制终止
+                if not self.thread.wait(2000):
+                    self.logger.warning("线程未在2秒内停止，将由Qt事件循环自动清理")
+            
+            # 清理引用，让Qt的deleteLater机制处理实际的对象销毁
             self.thread = None
             self.worker = None
 
@@ -903,14 +924,14 @@ class MainAppLogic(QObject):
         self.state_manager.set_translating(False)
         self.state_manager.set_status_message(f"任务失败: {error_message}")
         
+        # 清理线程
         if self.thread and self.thread.isRunning():
+            self.logger.warning("错误发生但线程仍在运行，请求退出...")
             self.thread.quit()
-            self.thread.wait(2000)
-            if self.thread.isRunning():
-                self.logger.warning("Thread did not finish within timeout, terminating...")
-                self.thread.terminate()
-                self.thread.wait(500)
+            if not self.thread.wait(2000):
+                self.logger.warning("线程未在2秒内停止，将由Qt事件循环自动清理")
         
+        # 清理引用
         self.thread = None
         self.worker = None
 
@@ -992,23 +1013,25 @@ class MainAppLogic(QObject):
     def shutdown(self):
         """应用关闭时的清理"""
         try:
-            if self.state_manager.is_translating():
+            if self.state_manager.is_translating() or (self.thread and self.thread.isRunning()):
                 self.logger.info("应用关闭中，停止翻译任务...")
                 
                 # 通知 worker 停止
                 if self.worker:
                     try:
                         self.worker.stop()
-                    except:
-                        pass
+                    except Exception as e:
+                        self.logger.warning(f"停止worker时出错: {e}")
                 
-                # 请求线程退出并等待（最多1秒）
+                # 请求线程退出并等待（最多3秒）
                 if self.thread and self.thread.isRunning():
                     self.thread.quit()
-                    if not self.thread.wait(1000):
-                        self.logger.warning("线程1秒内未停止，放弃等待")
+                    if not self.thread.wait(3000):
+                        self.logger.warning("线程3秒内未停止，强制终止")
+                        self.thread.terminate()
+                        self.thread.wait()
                     else:
-                        self.logger.info("翻译线程已停止")
+                        self.logger.info("翻译线程已正常停止")
                 
                 self.thread = None
                 self.worker = None
