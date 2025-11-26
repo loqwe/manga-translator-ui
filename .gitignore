@@ -180,3 +180,12 @@ fonts/
 
 # Kiro IDE settings
 .kiro/
+
+# Manga decrypt tools (本地解密工具)
+manga_decrypt/
+
+# Resources backup folders
+resources (1)/
+
+# Original images (测试/工作目录)
+originals/
