@@ -1,15 +1,7 @@
 {
-  "timestamp": "2025-11-17 16:10:08",
+  "timestamp": "2025-11-25 23:44:32",
   "folder": "D:/漫画/已翻译",
   "comics": {
-    "manga_translator_work": {
-      "chapters": [],
-      "cbz_files": [
-        "inpainted"
-      ],
-      "path": "D:\\漫画\\已翻译\\manga_translator_work",
-      "latest": "inpainted"
-    },
     "借妻條約": {
       "chapters": [],
       "cbz_files": [
@@ -118,15 +110,6 @@
       ],
       "path": "D:\\漫画\\已翻译\\排球少女",
       "latest": "Chapter 69_9d3a17"
-    },
-    "未翻译": {
-      "chapters": [],
-      "cbz_files": [
-        "Chapter 20",
-        "Chapter 22"
-      ],
-      "path": "D:\\漫画\\已翻译\\未翻译",
-      "latest": "Chapter 22"
     },
     "猎艳管理员": {
       "chapters": [],
@@ -294,10 +277,11 @@
         "Chapter 55",
         "Chapter 56_e6ddc1",
         "Chapter 57_7a2960",
-        "Chapter 58_2f5af9"
+        "Chapter 58_2f5af9",
+        "Chapter 59_8ed41d"
       ],
       "path": "D:\\漫画\\已翻译\\飞机杯女神连线中",
-      "latest": "Chapter 58_2f5af9"
+      "latest": "Chapter 59_8ed41d"
     }
   }
 }
