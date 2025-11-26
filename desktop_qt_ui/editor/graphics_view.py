@@ -1051,7 +1051,8 @@ class GraphicsView(QGraphicsView):
                 self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
                 # 创建一个从起始位置开始的鼠标事件
                 from PyQt6.QtGui import QMouseEvent
-                from PyQt6.QtCore import QEvent, QPointF
+                from PyQt6.QtCore import QEvent
+                # QPointF已在文件顶部导入，无需重复导入
                 press_event = QMouseEvent(
                     QEvent.Type.MouseButtonPress,
                     QPointF(self._drag_start_pos),
